@@ -246,21 +246,27 @@ $('#camBtn').onclick = async () => {
 // ---------------------------------------------------------------- capture
 const grabCanvas = document.createElement('canvas');
 const gctx = grabCanvas.getContext('2d', {willReadFrequently: true});
-// The next camera frame; gives up after 400 ms so a stalled camera can't hang a capture
-// (the frozen-camera check in grab() then reopens it).
+// The next camera frame: resolves true when one arrives, false after 400 ms without one (so
+// a stalled camera can't hang a capture; grab() counts those and reopens the camera).
 function nextVideoFrame(v) {
   return new Promise(res => {
-    const t = setTimeout(res, 400);
-    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(); });
-    else setTimeout(() => { clearTimeout(t); res(); }, 45);
+    const t = setTimeout(() => res(false), 400);
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(true); });
+    else setTimeout(() => { clearTimeout(t); res(true); }, 45);
   });
 }
 // Average a few camera frames; returns luminance, green-ness (and colour if asked) at analysis
 // size. One accumulator is reused (a new one per photo made iPhones run short of memory).
-// A real camera never gives two byte-identical frames (sensor noise): if it does, the camera
-// has frozen (iOS can stall it), so it is reopened and the photo taken again.
-let accBuf = null, lastSig = -1, sameCount = 0;
-function frameSig(d) { let s = 0; for (let i = 0; i < d.length; i += 4093) s = (s * 31 + d[i]) | 0; return s; }
+// Frozen camera (iOS can stall it): no new frame for 3 x 400 ms, or the same frame three times
+// running - a real camera's sensor noise makes that impossible, except in a nearly black
+// picture (noise reduction can give solid zeros), which doesn't count. Then the camera is
+// reopened and the photo taken again.
+let accBuf = null, lastSig = -1, sameCount = 0, stalls = 0;
+function frameSig(d) {
+  let s = 0, top = 0;
+  for (let i = 0; i < d.length; i += 4093) { s = (s * 31 + d[i]) | 0; if (d[i] > top) top = d[i]; }
+  return top > 12 ? s : -2 - Math.random();       // nearly black: never "the same"
+}
 async function grab(n, colour, retried) {
   const v = $('#video');
   const scale = Math.min(1, MAX_W / v.videoWidth, Math.sqrt(MAX_PIXELS / (v.videoWidth * v.videoHeight)));
@@ -269,14 +275,14 @@ async function grab(n, colour, retried) {
   if (!accBuf || accBuf.length !== W * H * 3) accBuf = new Uint16Array(W * H * 3);
   const acc = accBuf; acc.fill(0);
   for (let k = 0; k < n; k++) {
-    await nextVideoFrame(v);
+    stalls = (await nextVideoFrame(v)) ? 0 : stalls + 1;
     gctx.drawImage(v, 0, 0, W, H);
     const d = gctx.getImageData(0, 0, W, H).data;
     const sig = frameSig(d);
     sameCount = sig === lastSig ? sameCount + 1 : 0;
     lastSig = sig;
     const track = stream && stream.getVideoTracks()[0];
-    if (sameCount >= 3 || (track && track.readyState === 'ended')) {
+    if (sameCount >= 3 || stalls >= 3 || (track && track.readyState === 'ended')) {
       if (retried) throw new Error('The camera stopped sending pictures and could not be restarted: reload the page and try again.');
       await reviveCamera();
       return grab(n, colour, true);
@@ -299,7 +305,7 @@ async function reviveCamera() {
   stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
     facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}});
   const v = $('#video'); v.srcObject = stream; await v.play().catch(() => {});
-  sameCount = 0; lastSig = -1;
+  sameCount = 0; lastSig = -1; stalls = 0;
   await sleep(1200);
 }
 function progress(i, n, label) {

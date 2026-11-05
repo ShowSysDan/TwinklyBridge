@@ -4,6 +4,13 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.11.1] - 2026-11-05
+
+- Frozen-camera check made safe: identical frames only count when the picture isn't nearly
+  black (in a dark room the all-off photo can come out solid zeros from noise reduction,
+  which 0.11.0 could mistake for a frozen camera and give up), and a camera that delivers no
+  new frame for 3 x 400 ms now counts as frozen too.
+
 ## [0.11.0] - 2026-11-05
 
 From three real captures (TWPROCTRLPLC21, iPhone, lit warehouse):
