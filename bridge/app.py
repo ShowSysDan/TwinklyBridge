@@ -19,6 +19,7 @@ from .ddp import DdpReceiver
 from .engine import ControlThread, OutputEngine
 from .exports import eos_patch_csv, eos_pixelmap_csv, preview_svg
 from .layout import auto_patch, parameter_summary
+from .patterns import PATTERNS
 from .sacn import SacnReceiver
 from .state import CONFIG, CONTROLLERS, lock, save_config, wanted_universes
 from .twinkly import Controller
@@ -324,18 +325,26 @@ def api_frames():
 
 
 # ---------------------------------------------------------------- tests
-@app.post("/api/controllers/<cid>/test")
-def api_test(cid):
-    """body: {"mode": "pixel"|"solid"|"off"|"stop", "index": 0, "rgb": [r,g,b], "seconds": 3}"""
-    c = get_ctrl(cid)
-    body = request.get_json(force=True) or {}
+@app.get("/api/patterns")
+def api_patterns():
+    return jsonify(PATTERNS)
+
+
+def start_test(c, body):
+    """Apply a test body to one controller. Returns an error string or None."""
     mode = body.get("mode", "stop")
-    secs = float(body.get("seconds", 3))
+    secs = max(0.5, min(3600.0, float(body.get("seconds", 3))))
     rgb = [max(0, min(255, int(v))) for v in (body.get("rgb") or [255, 255, 255])[:3]]
-    if not c.n_led and not c.connect():
-        return jsonify(error=c.error), 502
+    if mode != "stop" and not c.n_led and not c.connect():
+        return c.error
     if mode == "stop":
         c.test = None
+    elif mode == "pattern":
+        name = body.get("pattern")
+        if name not in PATTERNS:
+            return f"pattern must be one of {', '.join(PATTERNS)}"
+        c.test = {"pattern": name, "params": {"rgb": rgb, "speed": float(body.get("speed") or 25)},
+                  "start": time.time(), "until": time.time() + secs}
     elif mode == "pixel":
         c.test = {"frame": c.pixel_frame(int(body.get("index", 0)), rgb), "until": time.time() + secs}
     elif mode == "solid":
@@ -343,7 +352,36 @@ def api_test(cid):
     elif mode == "off":
         c.test = {"frame": bytes(c.n_led * c.bpp), "until": time.time() + secs}
     else:
-        return jsonify(error="mode must be pixel, solid, off or stop"), 400
+        return "mode must be pattern, pixel, solid, off or stop"
+    return None
+
+
+@app.post("/api/test")
+def api_test_all():
+    """body: {"ids": [...] (omit = every enabled controller), plus the per-controller test body}"""
+    body = request.get_json(force=True) or {}
+    with lock:
+        ids = body.get("ids") or [c.id for c in CONTROLLERS.values() if c.enabled]
+        ctrls = [CONTROLLERS[i] for i in ids if i in CONTROLLERS]
+    errors = {c.id: e for c in ctrls if (e := start_test(c, body))}
+    if body.get("mode") in ("pattern", "solid"):
+        log.info("test %s %s on %s by %s", body.get("mode"), body.get("pattern", ""),
+                 ", ".join(c.name for c in ctrls) or "nothing", client_ip())
+    status = 200 if not errors else 400 if any("must be" in e for e in errors.values()) else 502
+    return jsonify(ok=not errors, controllers=len(ctrls), errors=errors), status
+
+
+@app.post("/api/controllers/<cid>/test")
+def api_test(cid):
+    """body: {"mode": "pattern"|"pixel"|"solid"|"off"|"stop", "pattern": "chase", "index": 0,
+    "rgb": [r,g,b], "speed": 25, "seconds": 3}"""
+    c = get_ctrl(cid)
+    body = request.get_json(force=True) or {}
+    err = start_test(c, body)
+    if err:
+        return jsonify(error=err), (400 if "must be" in err else 502)
+    if body.get("mode") == "pattern":
+        log.info("test pattern %s on %s by %s", body.get("pattern"), c.name, client_ip())
     return jsonify(ok=True)
 
 

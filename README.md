@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.3.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.4.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -43,6 +43,7 @@ the real-time protocol, which is what this bridge does.
 | **Twinkly real-time out** | Fixed-rate output loop (30 fps default), fragments interleaved across controllers; all HTTP on its own thread so one dead controller never stalls the rest |
 | **Hands-off modes** | A controller enters `rt` when data arrives for its range, `rt` is re-asserted every 30 s, tokens re-login on 401, and after the idle timeout the controller returns to the movie / effect / playlist it was playing |
 | **Camera maps** | *Pull map* reads the 2D / 3D layout stored on the controller (`layout/full`), or upload a CSV |
+| **Test patterns** | Channels, ports, index markers, chase, gradient, rainbow, solid, and a pixel stepper, on one controller or all, to prove every pixel answers before mapping |
 | **Parameter count** | As soon as a map is in, how many Eos parameters it uses, per controller and in total (see [Parameter count](#parameter-count)) |
 | **Live map** | Every LED drawn where it really is, lit with the frames going out; click one to flash it and read its controller / port / LED |
 | **Auto patch** | Every controller on contiguous universes (170 RGB pixels / 510 channels each), ordered by group offset |
@@ -164,7 +165,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.3.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.4.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -380,18 +381,43 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 
+### Test patterns: prove every pixel first
+
+Before mapping or programming, check the bridge really controls each pixel. In the
+**Test patterns** panel pick a controller (or *All enabled*), a pattern and how long to run
+it, and press *Start pattern*. A running test overrides sACN for those controllers;
+*Stop all tests* hands them back. The live map shows exactly what is being sent.
+
+| Pattern | What to look for on the installation |
+|---|---|
+| `channels` | The whole chain red, then green, then blue, then white, 1.5 s each. A wrong order means the controller's colour order / LED profile is set wrong |
+| `ports` | Each port one colour (red, green, blue, orange, magenta, ...), its first LED white and its last LED dim grey. Shows port order, where each string starts and ends, and any LED that stays dark |
+| `markers` | LED 0 green, every 100th red, every 50th yellow, every 10th dim white: count along the chain to match index to physical LED |
+| `chase` | One dot (in the chosen colour) with a tail running down the whole chain at *Speed* LEDs per second; watch for skips, doubles or stalls |
+| `gradient` | Each port fades from off to full along its length |
+| `rainbow` | A scrolling rainbow: every LED a different colour on every frame |
+| `solid` | Every LED in the chosen colour |
+
+The **Pixel stepper** lights one LED (index in chain order, from 0) for 30 s; -10 / ◀ /
+▶ / +10 move it, and the readout gives its port and LED number, e.g. `251 = port 1, LED 2`.
+The *Flash red* / *Blackout 3 s* buttons on each card and clicking an LED on the live map
+still work too.
+
 ### If Pull map fails
 
 The error stays on the controller's card and names every URL tried and the controller's
 reply. The common one:
 
 - **`/xled/v2/led/layout/full -> 404 {"result":{"code":2404}}`** (and the v1 URL): the
-  controller is reachable and logged in but did not return a layout there. Either it has
-  never been camera-mapped, or its firmware keeps the map somewhere else (seen on a
-  TWPROCTRLPLC21 fw 4.1.0 that does have a map in the Twinkly app). Press **Diagnose**: it
+  controller is reachable and logged in but did not return a layout there. On Twinkly Pro
+  firmware 4.x (TWPROCTRLPLC21 fw 4.1.0) this is normal: a packet capture shows the app
+  keeps the map in the Twinkly cloud and never stores it on the controller, so there is
+  nothing to pull (details in [docs/protocol.md](docs/protocol.md)). Press **Diagnose**: it
   tries every likely map URL, read-only, and lists what answered; a line marked
-  `COORDINATES` is where the map is. Copy the result into an issue. Meanwhile **Map from
-  ports** or **Upload CSV** gives a working map. If the controller is in a group, also try
+  `COORDINATES` is where the map is. Without one, use **Map from ports** or **Upload CSV**.
+- **Mapping in the Twinkly app deletes the controller's movies.** After a camera-map edit
+  the app sends `DELETE /xled/v2/movies`. Re-upload movies from the app afterwards, or the
+  bridge's *restore previous mode when idle* has no movie to go back to. If the controller is in a group, also try
   *Pull map* on the group's master.
 - **`cannot log in`**: the controller is unreachable on TCP 80 from the bridge (VLAN /
   firewall), or it isn't a Twinkly.
@@ -534,7 +560,10 @@ DELETE /api/controllers/<id>/map
 GET  /api/controllers/<id>/map.csv
 GET  /api/map                            points per controller
 GET  /api/frames                         last frame per controller, base64
-POST /api/controllers/<id>/test          {"mode": "pixel"|"solid"|"off"|"stop", "index": 10, "rgb": [255,0,0], "seconds": 3}
+POST /api/controllers/<id>/test          {"mode": "pattern"|"pixel"|"solid"|"off"|"stop", "pattern": "chase",
+                                          "index": 10, "rgb": [255,0,0], "speed": 25, "seconds": 3}
+POST /api/test                           same body plus "ids": [...] (omit = every enabled controller)
+GET  /api/patterns                       pattern names and what each checks
 GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB
 GET  /api/export/eos_patch.csv           same parameters
@@ -592,6 +621,7 @@ TwinklyBridge/
 │   ├── engine.py            # output loop + control (HTTP) thread
 │   ├── layout.py            # maps -> pixel grid, auto patch, parameter_summary()
 │   ├── exports.py           # Eos pixel map / patch sheet CSV, preview SVG
+│   ├── patterns.py          # test patterns
 │   ├── security.py          # allowlist, password, cross-site blocking, headers
 │   ├── logs.py              # console / local syslog / remote syslog
 │   ├── static/              # css/style.css, js/app.js

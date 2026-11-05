@@ -4,6 +4,38 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.4.0] - 2026-11-05
+
+- **Test patterns**, to prove per-pixel control before mapping: a *Test patterns* panel
+  runs a pattern on one controller or every enabled one for a set time (sACN is ignored
+  while it runs; *Stop all tests* hands back). Patterns: `channels` (R, G, B, W in turn:
+  colour order), `ports` (a colour per port, first LED white, last dim: port order and
+  lengths), `markers` (LED 0 green, every 100th red, 50th yellow, 10th dim: count along
+  the chain), `chase` (a dot with a tail at a set speed), `gradient` (off to full along
+  each port), `rainbow` (scrolling), `solid`. Rendered per output frame in under 1 ms for
+  1,250 LEDs. RGBW controllers get the W channel for white.
+- **Pixel stepper**: light LED *n* for 30 s with -10 / -1 / +1 / +10 buttons; shows its
+  port and LED number.
+- API: `GET /api/patterns`, `POST /api/test` (several controllers at once),
+  `mode: "pattern"` on `POST /api/controllers/<id>/test`. The controller card shows which
+  test is running (`test_pattern` in `/api/status`).
+
+## [0.3.2] - 2026-11-05
+
+- Capture of the Twinkly app viewing and camera-editing the map: the app never reads or
+  writes a layout on the controller; the map lives in the Twinkly cloud
+  (`api.illucere.com`, `illucere-storage` S3). Recorded in docs/protocol.md with the calls
+  the app does make, including `GET /xled/v2/device/config` and the
+  `DELETE /xled/v2/movies` it sends after a map edit (deletes every stored movie).
+- The Pull map 404 message now says the map is in the Twinkly cloud and points to Map from
+  ports / Upload CSV. Diagnose also reads `device/config`.
+
+## [0.3.1] - 2026-11-05
+
+- docs/protocol.md: recorded the Diagnose result from the TWPROCTRLPLC21 fw 4.1.0 that
+  shows a map in the Twinkly app but answers 2404 on every layout / map URL tried, v2 and
+  v1. The controller does not always hold the app's map.
+
 ## [0.3.0] - 2026-11-05
 
 - **Diagnose** button on each controller: logs in and GETs every likely map URL

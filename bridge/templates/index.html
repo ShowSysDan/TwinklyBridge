@@ -38,6 +38,28 @@
     </div>
 
     <div>
+      <h2>Test patterns</h2>
+      <p class="hint">Takes over the chosen controllers (sACN is ignored while a test runs) and lights them from the bridge, to prove every pixel answers. The live map shows what is being sent.</p>
+      <div class="settings">
+        <label for="tTarget">Controllers</label><select id="tTarget"><option value="">All enabled</option></select>
+        <label for="tPattern">Pattern</label><select id="tPattern"></select>
+        <p class="hint wide" id="tDesc"></p>
+        <label for="tColour">Colour (solid, chase head, pixel)</label><input type="color" id="tColour" value="#ffffff">
+        <label for="tSpeed">Speed (LEDs per second)</label><input type="number" id="tSpeed" value="25" min="1" max="2000">
+        <label for="tSecs">Run for (s)</label><input type="number" id="tSecs" value="60" min="1" max="3600">
+        <div class="wide"><button id="tStart" class="primary">Start pattern</button> <button id="tStop">Stop all tests</button> <span class="hint" id="tMsg"></span></div>
+      </div>
+      <h2 style="margin-top:16px">Pixel stepper</h2>
+      <div class="stepper">
+        <button data-step="-10">-10</button><button data-step="-1">&#9664;</button>
+        <input type="number" id="tIndex" value="0" min="0">
+        <button data-step="1">&#9654;</button><button data-step="10">+10</button>
+        <span class="hint" id="tWhere"></span>
+      </div>
+      <p class="hint">Lights one LED (index in chain order, from 0) in the chosen colour for 30 s; the readout gives its port and LED number, to find on the installation.</p>
+    </div>
+
+    <div>
       <h2>sACN input</h2>
       <div class="settings">
         <label for="sIface">Listen on interface</label><input type="text" id="sIface" placeholder="0.0.0.0" style="width:9em">

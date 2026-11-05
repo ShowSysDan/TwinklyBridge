@@ -26,12 +26,13 @@ urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHa
 RT_PORT = 7777
 FRAGMENT = 900
 
-# Read-only URLs Diagnose tries, to find where a firmware keeps its map. Only led/layout/full
-# is confirmed (packet captures, xled docs); the rest are guesses worth one GET each.
+# Read-only URLs Diagnose tries, to find where a firmware keeps its map. led/layout/full is
+# the documented one; Pro fw 4.1.0 keeps the app's map in the Twinkly cloud instead (see
+# docs/protocol.md, capture 3), so on those this list mostly confirms there is none.
 PROBE_PATHS = [f"/xled/{v}/{p}" for v in ("v2", "v1") for p in (
     "led/layout/full", "led/layout", "led/layout/2d", "led/layout/3d", "layout/full", "layout",
     "led/map", "led/mapping", "mapping", "map", "led/layout/full?aspectXY=0", "led/config",
-    "summary", "gestalt", "led/out/brightness", "movies", "movies/current", "playlist",
+    "summary", "gestalt", "device/config", "led/out/brightness", "movies", "movies/current", "playlist",
 )] + ["/xled/info"]
 
 
@@ -124,7 +125,7 @@ class Controller:
         self.want_live = False
         self.last_frame = b""
         self.frames_sent = 0
-        self.test = None                                     # {"frame": bytes, "until": t}
+        self.test = None          # {"frame": bytes, "until": t} or {"pattern", "params", "start", "until"}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._slices = None
 
@@ -146,7 +147,8 @@ class Controller:
                 "ddp_range": [self.ddp_start, self.ddp_start + self.n_led * self.bpp - 1] if self.source == "ddp" and self.n_led else [],
                 "status": self.status, "error": self.error, "active": self.active, "map_error": self.map_error,
                 "frames_sent": self.frames_sent, "api": self.api, "prev_mode": self.prev_mode,
-                "testing": self.testing(time.time())}
+                "testing": self.testing(time.time()),
+                "test_pattern": (self.test or {}).get("pattern") or ("frame" if self.test else "")}
 
     @property
     def bpp(self):
@@ -266,6 +268,16 @@ class Controller:
     def testing(self, now):
         return bool(self.test) and now < self.test["until"]
 
+    def test_frame(self, now):
+        """The frame the running test shows now: a fixed frame, or a pattern rendered for this tick."""
+        test = self.test
+        if not test:
+            return None
+        if "frame" in test:
+            return test["frame"]
+        from .patterns import render
+        return render(self, test["pattern"], now - test["start"], test["params"])
+
     def restore_mode(self):
         self.rt_asserted_at = 0.0
         if not self.token:
@@ -296,9 +308,9 @@ class Controller:
                 in_group = grp.get("mode") not in (None, "", "none")
                 raise RuntimeError(
                     f"{self.name} ({self.ip}, {self.product or 'unknown model'} fw {self.fw or '?'}) returned "
-                    f"no layout at the URLs the bridge knows: {e}. Either it has never been camera-mapped, "
-                    f"or this firmware keeps the map elsewhere: press Diagnose and send the result. "
-                    f"Meanwhile Map from ports or Upload CSV gives a usable map."
+                    f"no layout: {e}. Twinkly Pro firmware 4.x keeps the map you see in the Twinkly app in "
+                    f"the Twinkly cloud, not on the controller, so there is nothing to pull. Use Map from "
+                    f"ports (exact addressing, one row per port) or Upload CSV."
                     + (f" It is in a group (mode {grp.get('mode')}); try Pull map on the group's master."
                        if in_group else "")) from e
             else:

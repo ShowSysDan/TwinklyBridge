@@ -55,7 +55,7 @@ class OutputEngine(threading.Thread):
             return None
         if c.testing(now):
             c.want_live = True
-            return c.test["frame"] if c.rt_ready(now) else None
+            return c.test_frame(now) if c.rt_ready(now) else None
         if c.source == "ddp":
             live = self.ddp.live(c.ddp_start - 1, c.n_led * c.bpp, idle)
         else:
