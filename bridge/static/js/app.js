@@ -2,14 +2,14 @@ const $ = s => document.querySelector(s);
 let status = null, maps = [], frames = {}, hit = [];      // hit: [{cid,index,x,y}] for click lookup
 let toastT = null;
 
-function toast(msg) {
+function toast(msg, ms) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600);
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms || (msg.length > 80 ? 9000 : 2600));
 }
 async function api(path, opts = {}) {
   const r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts});
   const j = await r.json().catch(() => ({}));
-  if (!r.ok && j.error) throw new Error(j.error);
+  if (!r.ok) throw new Error(j.error || `${opts.method || 'GET'} ${path}: HTTP ${r.status}`);
   return j;
 }
 
@@ -54,7 +54,8 @@ function renderControllers() {
         <button data-a="remove" class="quiet">Remove</button>
         <input type="file" accept=".csv,text/csv" hidden data-a="csvfile">
       </div>
-      ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}`;
+      ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}
+      ${c.map_error ? `<div class="err">${esc(c.map_error)}</div>` : ''}`;
     el.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('change', async () => {
       const k = inp.dataset.k, v = inp.type === 'checkbox' ? inp.checked : inp.value;
       try { await api(`/api/controllers/${c.id}`, {method: 'PUT', body: JSON.stringify({[k]: v})}); toast('Patched'); refresh(); }

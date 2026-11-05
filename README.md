@@ -378,6 +378,30 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 
+### If Pull map fails
+
+The error stays on the controller's card and names every URL tried and the controller's
+reply. The common one:
+
+- **`/xled/v2/led/layout/full -> 404` and `/xled/v1/led/layout/full -> 404`**: the
+  controller answered, but has no layout to give. Usually it has never been camera-mapped:
+  map it in the Twinkly app (on the phone, on the same network), then *Pull map* again. If
+  the controller is in a group, pull from the group's master. Otherwise export a map with
+  `tools/twinkly_layout.py` from another controller or build an `index,x,y,z` CSV and use
+  *Upload CSV*.
+- **`cannot log in`**: the controller is unreachable on TCP 80 from the bridge (VLAN /
+  firewall), or it isn't a Twinkly.
+- **`bridge: ...`**: the error came from the bridge itself, not the controller (e.g. the
+  page is stale after the controller was removed): reload the page.
+
+To see exactly what the controller says, from the bridge PC:
+
+```bash
+curl -i http://<controller-ip>/xled/v2/gestalt
+```
+
+A JSON reply with `number_of_led` means the controller's API is reachable from there.
+
 ### Parameter count
 
 Once a controller has a map (pulled from the Twinkly or loaded from CSV) the bridge counts

@@ -55,6 +55,7 @@ class MockState:
         self.bad = 0
         self.parts = {}
         self.complete = b""                 # last fully received rt frame
+        self.no_layout = False              # True: answer layout/full with 404, like an unmapped controller
         self.lock = threading.Lock()
 
     @property
@@ -87,7 +88,7 @@ def make_handler(state):
                 return self._send(200, {"version": "4.1.0", "desc": "Release build", "result": {"code": 1000}})
             if self.path == "/xled/v2/application/mode":
                 return self._send(200, {**state.mode, "result": {"code": 1000}})
-            if self.path == "/xled/v2/led/layout/full":
+            if self.path == "/xled/v2/led/layout/full" and not state.no_layout:
                 return self._send(200, layout())
             self._send(404, {"result": {"code": 2404}})
 

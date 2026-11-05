@@ -50,8 +50,19 @@ def client_ip():
 def get_ctrl(cid):
     c = CONTROLLERS.get(cid)
     if not c:
-        abort(404, "no such controller")
+        abort(404, f"the bridge has no controller '{cid}' (reload the page; it may have been removed)")
     return c
+
+
+@app.errorhandler(404)
+@app.errorhandler(405)
+def api_not_found(err):
+    """JSON errors on /api/, so the UI can say what went wrong instead of failing silently."""
+    if request.path.startswith("/api/"):
+        detail = err.description if err.code == 404 and "controller" in (err.description or "") \
+            else f"{request.method} {request.path} is not a bridge API endpoint"
+        return jsonify(ok=False, error=f"bridge: {detail}"), err.code
+    return err
 
 
 def export_params():
@@ -218,9 +229,12 @@ def api_pull_map(cid):
     c = get_ctrl(cid)
     try:
         n = c.pull_map()
+        c.map_error = ""
     except Exception as e:                                   # noqa: BLE001
-        log.warning("map pull from %s (%s) failed: %s: %s", c.name, c.ip, type(e).__name__, e)
-        return jsonify(error=f"{type(e).__name__}: {e}"), 502
+        msg = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
+        c.map_error = msg
+        log.warning("map pull from %s (%s) failed: %s", c.name, c.ip, msg)
+        return jsonify(error=f"Pull map failed: {msg}"), 502
     save_config()
     log.info("map pulled from %s (%s) by %s: %d points (%s), %d parameters",
              c.name, c.ip, client_ip(), n, c.map_source, c.parameters)

@@ -4,6 +4,19 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.2.1] - 2026-11-05
+
+- **Pull map 404s now say what happened.** When the controller answers 404 to the layout
+  request on both `/xled/v2/led/layout/full` and `/xled/v1/led/layout/full`, the error
+  names both URLs, the controller's reply, its model / firmware and group mode, and what to
+  do (camera-map it in the Twinkly app, pull from the group master, or upload a CSV),
+  instead of a bare `HTTP Error 404: Not Found`. The error stays on the controller's card
+  until the next successful pull (`map_error` in `/api/status`), and long messages stay on
+  screen longer.
+- Pull map retries once with a fresh login if the controller says the token expired (401).
+- The bridge's own 404s on `/api/` are JSON (`bridge: ...`), and the UI reports any failed
+  API call instead of carrying on as if it had worked.
+
 ## [0.2.0] - 2026-11-05
 
 Imported into GitHub (ShowSysDan/TwinklyBridge) and brought in line with the other
