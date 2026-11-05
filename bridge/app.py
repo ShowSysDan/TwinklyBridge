@@ -12,9 +12,9 @@ import os
 import threading
 import time
 
-from flask import Flask, Response, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, make_response, render_template, request
 
-from . import __version__, logs, security, state
+from . import __version__, logs, mapping, security, state, tls
 from .ddp import DdpReceiver
 from .engine import ControlThread, OutputEngine
 from .exports import eos_patch_csv, eos_pixelmap_csv, preview_svg
@@ -81,6 +81,133 @@ def csv_response(text, filename):
 @app.get("/")
 def index():
     return render_template("index.html", version=__version__)
+
+
+@app.get("/map")
+def map_page():
+    """The phone page for camera mapping (needs HTTPS for the camera)."""
+    return render_template("map.html", version=__version__, https_port=app.config.get("HTTPS_PORT", 0))
+
+
+@app.get("/api/mapping/info")
+def api_mapping_info():
+    """Where the phone should go: the HTTPS port (0 = no certificate, HTTPS off)."""
+    return jsonify({"https_port": app.config.get("HTTPS_PORT", 0), "host": request.host.rsplit(":", 1)[0],
+                    "session": mapping.SESSION.describe() if mapping.SESSION else None})
+
+
+def _deliver(ctrls, frames, timeout=2.5):
+    """Set each controller's mapping frame and wait until it has gone out at least twice.
+    Returns the names of controllers that did not take it in time."""
+    now = time.time()
+    marks = {}
+    for c in ctrls:
+        marks[c.id] = c.frames_sent
+        c.test = {"frame": frames[c.id], "until": now + 60, "pattern": "mapping"}
+    end = time.time() + timeout
+    late = list(ctrls)
+    while late and time.time() < end:
+        late = [c for c in late if not (c.frames_sent >= marks[c.id] + 2 and c.last_frame == frames[c.id])]
+        if late:
+            time.sleep(0.01)
+    return [c.name for c in late]
+
+
+@app.post("/api/mapping/start")
+def api_mapping_start():
+    """body: {"ids": [...] (omit = every enabled controller), "level": 128}"""
+    body = request.get_json(force=True) or {}
+    with lock:
+        ids = body.get("ids") or [c.id for c in CONTROLLERS.values() if c.enabled]
+        ctrls = [CONTROLLERS[i] for i in ids if i in CONTROLLERS]
+    for c in ctrls:
+        if not c.n_led and not c.connect():
+            return jsonify(error=f"{c.name}: {c.error}"), 502
+    if not ctrls:
+        return jsonify(error="no controllers to map"), 400
+    with mapping.lock:
+        if mapping.SESSION:
+            for c in mapping.SESSION.ctrls:
+                c.test = None
+        s = mapping.Session(ctrls, body.get("level", 128))
+        mapping.SESSION = s
+    late = _deliver(ctrls, {c.id: s.frame(c, "black") for c in ctrls}, timeout=8)   # first one logs in, enters rt
+    if late:
+        return jsonify(error=f"not taking frames: {', '.join(late)} (check it is online)"), 502
+    log.info("camera mapping started by %s: %s, %d LEDs, %d steps", client_ip(),
+             ", ".join(c.name for c in ctrls), s.total, len(s.steps))
+    return jsonify(s.describe())
+
+
+def _session(body):
+    s = mapping.SESSION
+    if not s or body.get("session") != s.id:
+        abort(make_response(jsonify(ok=False, error="that mapping session is over (another phone may have "
+                                                    "started one, or it was saved): start again"), 409))
+    return s
+
+
+@app.post("/api/mapping/step")
+def api_mapping_step():
+    """body: {"session": id, "step": "white"} -> returns once the frame is out on every controller."""
+    body = request.get_json(force=True) or {}
+    s = _session(body)
+    step = body.get("step")
+    if step not in s.steps:
+        return jsonify(error=f"unknown step {step!r}"), 400
+    t = time.time()
+    late = _deliver(s.ctrls, {c.id: s.frame(c, step) for c in s.ctrls})
+    if late:
+        return jsonify(error=f"not taking frames: {', '.join(late)}"), 502
+    return jsonify(ok=True, ms=round((time.time() - t) * 1000))
+
+
+@app.post("/api/mapping/stop")
+def api_mapping_stop():
+    with mapping.lock:
+        if mapping.SESSION:
+            for c in mapping.SESSION.ctrls:
+                c.test = None
+            mapping.SESSION = None
+    return jsonify(ok=True)
+
+
+@app.post("/api/mapping/save")
+def api_mapping_save():
+    """body: {"session": id, "points": [[x, y] | null, ...] (one per LED, global order),
+    "colours": ["RGB" | "GRB" | ... | null, ...], "save": true}. Fills gaps along each string,
+    saves each controller's map (unless save is false) and returns a report per port."""
+    body = request.get_json(force=True) or {}
+    s = _session(body)
+    pts, cols = body.get("points") or [], body.get("colours") or []
+    if len(pts) != s.total:
+        return jsonify(error=f"expected {s.total} points, got {len(pts)}"), 400
+    found = sum(1 for p in pts if p)
+    if found < max(3, s.total // 10):
+        return jsonify(error=f"only {found} of {s.total} LEDs were found: nothing saved. Darken the room, "
+                             f"get the whole installation in frame, hold the phone still, and try again"), 422
+    out = []
+    for c in s.ctrls:
+        o = s.offsets[c.id]
+        mine = [p if p and len(p) >= 2 else None for p in pts[o:o + c.n_led]]
+        rep = mapping.report(mine, cols[o:o + c.n_led], c.ports, c.n_led)
+        filled, n_filled = mapping.fill_gaps(mine, c.ports, c.n_led)
+        n_found = sum(1 for p in mine if p)
+        if body.get("save", True):
+            c.map = [[round(p[0], 5), round(p[1], 5), 0] if p else [0, 0, 0] for p in filled]
+            c.map_source = f"camera, {n_found} seen, {n_filled} filled"
+            c.map_error = ""
+        out.append({"id": c.id, "name": c.name, "found": n_found, "filled": n_filled,
+                    "parameters": c.parameters, "ports": rep})
+    if body.get("save", True):
+        save_config()
+        with mapping.lock:
+            for c in s.ctrls:
+                c.test = None
+            mapping.SESSION = None
+        log.info("camera map saved by %s: %s", client_ip(),
+                 "; ".join(f"{r['name']} {r['found']} seen {r['filled']} filled" for r in out))
+    return jsonify(ok=True, controllers=out, totals=parameter_summary())
 
 
 @app.get("/healthz")
@@ -432,7 +559,7 @@ _init_lock = threading.Lock()
 _initialised = False
 
 
-def create_app(config_path=None, start=True):
+def create_app(config_path=None, start=True, https_host=None):
     """Load .env and the config, install access control, start the threads. Safe to call twice.
     gunicorn must run ONE worker: the sACN / DDP sockets and the controller sessions live in
     the process, and a second worker would fight over UDP 5568 and the rt tokens."""
@@ -455,6 +582,8 @@ def create_app(config_path=None, start=True):
             log.warning(w)
         if start:
             start_threads()
+            https_host = os.environ.get("HTTPS_HOST") or https_host or os.environ.get("HOST") or "0.0.0.0"
+            app.config["HTTPS_PORT"] = tls.start(app, https_host, int(os.environ.get("HTTPS_PORT", "5121") or 0))
         _initialised = True
     return app
 
@@ -469,7 +598,7 @@ def main(argv=None):
     load_env()
     host = args.host or os.environ.get("HOST") or "127.0.0.1"
     port = args.port or int(os.environ.get("PORT") or DEFAULT_PORT)
-    create_app(args.config)
+    create_app(args.config, https_host=host)
     log.info("web UI on http://%s:%d", host, port)
     # No reloader (it would start every thread twice) and no Werkzeug debugger (it offers a
     # Python console to anyone who can reach the port).

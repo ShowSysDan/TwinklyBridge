@@ -4,6 +4,33 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.5.0] - 2026-11-05
+
+- **Camera mapping from a phone** (`https://<bridge>:5121/map`). The bridge lights every
+  LED of the chosen controllers in Gray-coded patterns (11 bit / inverse pairs for 1,250
+  LEDs, plus black, white, red, green, blue and a closing white: 28 frames, about 15 s); the
+  phone photographs each one, works out which LED every camera pixel saw, and sends back one
+  position per LED. Several controllers mapped together share one coordinate space. Runs
+  entirely in the phone's browser, no app and no new Python packages.
+- **String lengths and colour order per port** from the same run: LEDs seen, where each
+  string really ends ("string ends at LED 200 of 250 configured"), dark LEDs before the end,
+  and which colour the camera saw for red / green / blue ("colours look GRB"). Shown on the
+  phone before saving; returned by the API.
+- LEDs the camera missed are filled in along their string; mis-decoded LEDs far from both
+  chain neighbours are dropped first. A moved camera (white at start vs end) is flagged.
+- **HTTPS listener** for the phone on `HTTPS_PORT` (default 5121), inside the bridge process
+  (run.py and the service alike), same access controls. TLS handshakes run per connection,
+  so a phone sitting on the certificate warning doesn't block anyone.
+- `tools/make_cert.py` (called by install.sh and install.bat) makes an iOS-acceptable
+  self-signed certificate: 825 days, the machine's names and IPs in subjectAltName,
+  serverAuth. Uses Git for Windows' openssl on Windows. `NEW_CERT=1 sudo bash install.sh`
+  makes a new one.
+- API: `GET /api/mapping/info`, `POST /api/mapping/start | step | save | stop`; page `/map`.
+- `Permissions-Policy` now allows the camera for the bridge's own pages.
+- Tests: Gray-code frames decode to every LED, gap filling and the port report, the phone
+  decoder against a synthetic camera in Node (noise, auto-exposure changes, a GRB port, a
+  short string), and a full session through the API to the mock controller.
+
 ## [0.4.0] - 2026-11-05
 
 - **Test patterns**, to prove per-pixel control before mapping: a *Test patterns* panel

@@ -11,6 +11,8 @@
 #
 #   PORT=8080 sudo bash install.sh        web UI port (default 5120)
 #   HOST=10.1.1.5 sudo bash install.sh    bind the web UI to one interface (default 0.0.0.0)
+#   HTTPS_PORT=5121 sudo bash install.sh  HTTPS port for phone camera mapping (default 5121, 0 = off)
+#   NEW_CERT=1 sudo bash install.sh       make a new self-signed certificate (e.g. after an IP change)
 #
 # Other actions:
 #
@@ -25,6 +27,7 @@ NAME=twinkly-bridge
 SERVICE=/etc/systemd/system/$NAME.service
 PORT="${PORT:-5120}"
 HOST="${HOST:-0.0.0.0}"
+HTTPS_PORT="${HTTPS_PORT:-5121}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run with sudo: sudo bash install.sh" >&2
@@ -59,6 +62,11 @@ if ! python3 -c 'import venv, ensurepip' 2>/dev/null; then
   exit 1
 fi
 case "$PORT" in ''|*[!0-9]*) echo "PORT must be a number" >&2; exit 1;; esac
+case "$HTTPS_PORT" in ''|*[!0-9]*) echo "HTTPS_PORT must be a number" >&2; exit 1;; esac
+if [ "$HTTPS_PORT" != 0 ] && ! command -v openssl >/dev/null; then
+  echo "openssl is not installed (needed for the HTTPS certificate):  sudo apt install openssl" >&2
+  exit 1
+fi
 
 echo "Installing twinkly-bridge from $APP_DIR as user $APP_USER, web UI on $HOST:$PORT"
 
@@ -82,8 +90,14 @@ if [ -f "$APP_DIR/bridge_config.json" ] && [ ! -f "$APP_DIR/instance/bridge_conf
   echo "Moved bridge_config.json into instance/"
 fi
 
+# Self-signed certificate for the phone page (browsers only allow the camera over HTTPS).
+if [ "$HTTPS_PORT" != 0 ]; then
+  sudo -u "$APP_USER" "$APP_DIR/venv/bin/python" "$APP_DIR/tools/make_cert.py" \
+    $([ "${NEW_CERT:-0}" = 1 ] && echo --force) "$APP_DIR/instance/cert.pem" "$APP_DIR/instance/key.pem"
+fi
+
 # Binding below 1024 needs a capability; everything else runs with none.
-if [ "$PORT" -lt 1024 ]; then
+if [ "$PORT" -lt 1024 ] || { [ "$HTTPS_PORT" != 0 ] && [ "$HTTPS_PORT" -lt 1024 ]; }; then
   CAPS="CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE"
 else
@@ -106,8 +120,9 @@ WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
 # One worker only: the sACN / DDP listeners and the controller sessions live in the process.
 # No control socket: gunicorn would put it in ~/.gunicorn, which the sandbox makes read-only.
+# --env wins over .env (systemd lets EnvironmentFile override Environment=); .env's HOST is for run.py.
 ExecStart=$APP_DIR/venv/bin/gunicorn --workers 1 --threads 8 --timeout 60 --graceful-timeout 10 --no-control-socket \\
-    --bind $HOST:$PORT wsgi:app
+    --env HTTPS_HOST=$HOST --env HTTPS_PORT=$HTTPS_PORT --bind $HOST:$PORT wsgi:app
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
@@ -160,7 +175,10 @@ else
   echo "twinkly-bridge is running on http://$HOST:$PORT"
 fi
 echo "Logs: sudo journalctl -u $NAME -f      Health: curl http://localhost:$PORT/healthz"
-echo "Open on the host firewall: TCP $PORT (web UI), UDP 5568 (sACN), UDP 4048 (DDP)."
+if [ "$HTTPS_PORT" != 0 ]; then
+  echo "Phone camera mapping: https://$(hostname -I 2>/dev/null | awk '{print $1}'):$HTTPS_PORT/map (accept the certificate warning once)"
+fi
+echo "Open on the host firewall: TCP $PORT (web UI), TCP $HTTPS_PORT (phone, HTTPS), UDP 5568 (sACN), UDP 4048 (DDP)."
 if ! grep -qE '^(PANEL_PASSWORD|ALLOWED_NETWORKS)=' "$APP_DIR/.env"; then
   echo
   echo "Note: $APP_DIR/.env sets no PANEL_PASSWORD or ALLOWED_NETWORKS, so anyone who can"

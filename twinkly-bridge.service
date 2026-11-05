@@ -17,8 +17,9 @@ WorkingDirectory=/home/twinkly/TwinklyBridge
 EnvironmentFile=/home/twinkly/TwinklyBridge/.env
 # One worker only: the sACN / DDP listeners and the controller sessions live in the process.
 # No control socket: gunicorn would put it in ~/.gunicorn, which the sandbox makes read-only.
+# HTTPS for the phone (camera mapping) runs inside the worker on HTTPS_PORT; --env beats .env.
 ExecStart=/home/twinkly/TwinklyBridge/venv/bin/gunicorn --workers 1 --threads 8 --timeout 60 --graceful-timeout 10 --no-control-socket \
-    --bind 0.0.0.0:5120 wsgi:app
+    --env HTTPS_HOST=0.0.0.0 --env HTTPS_PORT=5121 --bind 0.0.0.0:5120 wsgi:app
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
