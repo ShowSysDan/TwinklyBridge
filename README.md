@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.10.2** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.11.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.10.2", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.11.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -513,7 +513,13 @@ shows the addresses, where HTTPS is listening, and why it is off if it is:
   --force`) and restart; the panel warns when the machine's IP is missing from it.
 - Use the address the panel shows, with the `https://` (typing it without now redirects).
 
-Tips: darken the room and keep the phone still; that matters more than anything else. The
+Lit rooms: mapping works with the lights on. Each capture is read both by brightness and by
+the LEDs' green colour (white walls, grey concrete and copper tinsel aren't green, however
+bright), and the better result is kept. A darker room still finds more LEDs, and shiny
+surfaces near the LEDs (tinsel) reflect their light; the phone shows how bright it measures
+the room.
+
+Tips: keep the phone still; that matters more than anything else. The
 wait after each pattern is measured per capture (camera lag x 1.3); if the result shows many
 *photos retaken* or stops with *the camera isn't keeping up*, raise *Shortest wait after
 each pattern*. If dots are scattered or strings aren't smooth rainbows, *Send photos to the

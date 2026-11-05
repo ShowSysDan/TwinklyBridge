@@ -340,7 +340,7 @@ def api_mapping_combine():
 
 # ---------------------------------------------------------------- capture photos (diagnosis)
 CAPTURE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-CAPTURE_FILE = re.compile(r"^[A-Za-z0-9_]{1,32}\.(png|json)$")
+CAPTURE_FILE = re.compile(r"^[A-Za-z0-9_]{1,32}\.(png|jpg|json)$")
 KEEP_CAPTURES = 20
 
 
@@ -357,17 +357,21 @@ def _capture_path(name, fname=None):
 
 @app.post("/api/mapping/captures/<name>/<fname>")
 def api_capture_upload(name, fname):
-    """The phone sends a capture's photos (PNG) and its notes (capture.json), one file per call."""
+    """The phone sends a capture's photos (JPEG; PNG from older pages) and its notes
+    (capture.json), one file per call."""
     path = _capture_path(name, fname)
-    want = "image/png" if fname.endswith(".png") else "application/json"
+    want = {"png": "image/png", "jpg": "image/jpeg", "json": "application/json"}[fname.rsplit(".", 1)[1]]
     if (request.mimetype or "") != want:
         return jsonify(error=f"send {fname} as {want}"), 415
+    body = request.get_data()
+    if not body:                                       # a cut-off upload: don't store an empty file
+        return jsonify(error="empty upload"), 400
     d = os.path.dirname(path)
     if os.path.isdir(d) and len(os.listdir(d)) >= 60:
         return jsonify(error="too many files in this capture"), 413
     os.makedirs(d, exist_ok=True)
     with open(path, "wb") as f:
-        f.write(request.get_data())
+        f.write(body)
     caps = sorted((e for e in os.scandir(captures_dir()) if e.is_dir()), key=lambda e: e.stat().st_mtime)
     for old in caps[:-KEEP_CAPTURES]:                 # keep the latest captures only
         shutil.rmtree(old.path, ignore_errors=True)

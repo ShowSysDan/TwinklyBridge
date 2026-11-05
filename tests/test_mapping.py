@@ -80,6 +80,15 @@ def test_decoder_on_a_harsh_synthetic_camera():
     assert d["stats"]["found"] > 1100 and d["wrong"] == 0 and d["meanErr"] < 0.6
 
 
+def test_green_ness_in_a_lit_warehouse():
+    """A lit warehouse: grey textured room around 140, copper tinsel that glints, the camera
+    exposed for the room, green spill round every LED. Reading the LEDs by green-ness finds
+    clearly more than by brightness, and the better one is used."""
+    d = run_sim("bright")
+    assert d["signal"] == "green-ness" and d["tried"]["green-ness"] > 1.15 * d["tried"]["brightness"]
+    assert d["stats"]["found"] > 850 and d["wrong"] < 0.03 * d["stats"]["found"]
+
+
 def test_stabilising_a_hand_held_phone():
     """Every photo drifts up to 12 px (sub-pixel) like a hand-held phone: lined up with the
     all-on photo first, every LED is still found in the right place and no 'moved' is raised;
@@ -151,6 +160,9 @@ def test_capture_photos_upload_and_zip(bridge, tmp_path, monkeypatch):
                 "/api/mapping/captures/ok/a.exe", "/api/mapping/captures/bad name/a.png"):
         assert client.post(url, data=png, content_type="image/png").status_code in (400, 404, 405)
     assert client.post("/api/mapping/captures/ok/a.png", data=png, content_type="text/plain").status_code == 415
+    assert client.post("/api/mapping/captures/ok/a.png", data=b"", content_type="image/png").status_code == 400
+    assert client.post("/api/mapping/captures/2026-11-05T10-00-00_90deg/b0.jpg", data=b"\xff\xd8jpeg",
+                       content_type="image/jpeg").status_code == 200
     assert client.delete("/api/mapping/captures/2026-11-05T10-00-00_90deg").get_json()["ok"]
     assert client.get("/api/mapping/captures").get_json() == []
 
