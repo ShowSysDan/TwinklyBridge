@@ -4,6 +4,22 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.4.0] - 2026-11-05
+
+- **Test patterns**, to prove per-pixel control before mapping: a *Test patterns* panel
+  runs a pattern on one controller or every enabled one for a set time (sACN is ignored
+  while it runs; *Stop all tests* hands back). Patterns: `channels` (R, G, B, W in turn:
+  colour order), `ports` (a colour per port, first LED white, last dim: port order and
+  lengths), `markers` (LED 0 green, every 100th red, 50th yellow, 10th dim: count along
+  the chain), `chase` (a dot with a tail at a set speed), `gradient` (off to full along
+  each port), `rainbow` (scrolling), `solid`. Rendered per output frame in under 1 ms for
+  1,250 LEDs. RGBW controllers get the W channel for white.
+- **Pixel stepper**: light LED *n* for 30 s with -10 / -1 / +1 / +10 buttons; shows its
+  port and LED number.
+- API: `GET /api/patterns`, `POST /api/test` (several controllers at once),
+  `mode: "pattern"` on `POST /api/controllers/<id>/test`. The controller card shows which
+  test is running (`test_pattern` in `/api/status`).
+
 ## [0.3.2] - 2026-11-05
 
 - Capture of the Twinkly app viewing and camera-editing the map: the app never reads or

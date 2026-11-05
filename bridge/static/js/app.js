@@ -24,7 +24,7 @@ function renderControllers() {
   for (const c of status.controllers) {
     const el = document.createElement('div'); el.className = 'ctrl' + (c.enabled ? '' : ' off');
     const lamp = c.status === 'streaming' ? 'on' : c.status === 'online' ? 'ok' : c.status === 'error' ? 'bad' : '';
-    const state = c.testing ? 'test pattern' : c.status === 'streaming' ? 'streaming' : c.status;
+    const state = c.testing ? `test: ${c.test_pattern === 'frame' ? 'pixel / flash' : c.test_pattern}` : c.status === 'streaming' ? 'streaming' : c.status;
     const uni = c.source === 'ddp'
       ? (c.ddp_range.length ? `DDP bytes ${c.ddp_range[0]} to ${c.ddp_range[1]}` : 'DDP')
       : (c.universes.length ? (c.universes.length === 1 ? `universe ${c.universes[0]}` : `universes ${c.universes[0]} to ${c.universes[c.universes.length-1]}`) : '');
@@ -129,6 +129,7 @@ async function refresh() {
   $('#ddpText').textContent = dd.error ? `DDP: ${dd.error}` : dd.active ? `DDP ${dd.rate} packets/s` : dd.enabled ? 'DDP listening on 4048' : 'DDP off';
   $('#fpsText').textContent = status.output.fps_actual;
   renderParameters(status.parameters);
+  renderTestTargets();
   const ae = document.activeElement;                      // don't clobber an edit in progress (buttons don't count)
   if (ae && ae.closest('#ctrls') && ae.matches('input, select')) return;
   renderControllers();
@@ -156,6 +157,57 @@ function renderParameters(p) {
     ${p.per_controller.map(c => `<tr><td>${esc(c.name)}</td><td>${c.pixels.toLocaleString()}</td><td>${c.bpp}</td>
       <td>${c.parameters.toLocaleString()}</td><td>${span(c.universes)}</td></tr>`).join('')}</table>`;
 }
+// ---------------------------------------------------------------- test patterns
+let patterns = {};
+function renderTestTargets() {
+  const sel = $('#tTarget'), want = ['', ...status.controllers.map(c => c.id)].join('|');
+  if (sel.dataset.key === want) return;
+  const keep = sel.value; sel.dataset.key = want;
+  sel.innerHTML = '<option value="">All enabled</option>' +
+    status.controllers.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.ip)})</option>`).join('');
+  sel.value = [...sel.options].some(o => o.value === keep) ? keep : '';
+  stepWhere();
+}
+function testTargets() {
+  const id = $('#tTarget').value;
+  return id ? status.controllers.filter(c => c.id === id) : status.controllers.filter(c => c.enabled);
+}
+function colourRGB() { const h = $('#tColour').value; return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
+async function runTest(body) {
+  const ids = testTargets().map(c => c.id);
+  if (!ids.length) { $('#tMsg').textContent = 'No controllers'; return; }
+  try { const r = await api('/api/test', {method: 'POST', body: JSON.stringify({ids, ...body})});
+        $('#tMsg').textContent = body.mode === 'stop' ? 'Stopped' : `Running on ${r.controllers}`; }
+  catch (e) { $('#tMsg').textContent = e.message; }
+  refresh();
+}
+function stepWhere() {
+  const c = testTargets()[0], i = +$('#tIndex').value;
+  if (!c) { $('#tWhere').textContent = ''; return; }
+  if (c.n_led) $('#tIndex').max = c.n_led - 1;
+  const [port, led] = portOf(c, i);
+  $('#tWhere').textContent = c.n_led && i >= c.n_led ? `past the last LED (${c.n_led - 1})` : `= port ${port}, LED ${led}${testTargets().length > 1 ? ' (on each controller)' : ''}`;
+}
+async function lightStep() {
+  stepWhere();
+  await runTest({mode: 'pixel', index: +$('#tIndex').value, rgb: colourRGB(), seconds: 30});
+}
+document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => {
+  const c = testTargets()[0], max = c && c.n_led ? c.n_led - 1 : 1e9;
+  $('#tIndex').value = Math.max(0, Math.min(max, +$('#tIndex').value + +b.dataset.step)); lightStep();
+});
+$('#tIndex').onchange = lightStep;
+$('#tTarget').onchange = stepWhere;
+$('#tPattern').onchange = () => { $('#tDesc').textContent = patterns[$('#tPattern').value] || ''; };
+$('#tStart').onclick = () => runTest({mode: 'pattern', pattern: $('#tPattern').value, rgb: colourRGB(),
+                                      speed: +$('#tSpeed').value, seconds: +$('#tSecs').value});
+$('#tStop').onclick = () => runTest({mode: 'stop', ids: status.controllers.map(c => c.id)});
+api('/api/patterns').then(p => {
+  patterns = p;
+  $('#tPattern').innerHTML = Object.keys(p).map(k => `<option value="${k}">${k}</option>`).join('');
+  $('#tPattern').onchange();
+});
+
 async function autoPatch(mode) {
   try { const r = await api('/api/patch/auto', {method: 'POST', body: JSON.stringify({mode, start_universe: 1, order: 'group'})});
         toast(`Patched ${r.length} controllers (${mode})`); refresh(); }

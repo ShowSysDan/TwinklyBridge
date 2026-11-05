@@ -125,7 +125,7 @@ class Controller:
         self.want_live = False
         self.last_frame = b""
         self.frames_sent = 0
-        self.test = None                                     # {"frame": bytes, "until": t}
+        self.test = None          # {"frame": bytes, "until": t} or {"pattern", "params", "start", "until"}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._slices = None
 
@@ -147,7 +147,8 @@ class Controller:
                 "ddp_range": [self.ddp_start, self.ddp_start + self.n_led * self.bpp - 1] if self.source == "ddp" and self.n_led else [],
                 "status": self.status, "error": self.error, "active": self.active, "map_error": self.map_error,
                 "frames_sent": self.frames_sent, "api": self.api, "prev_mode": self.prev_mode,
-                "testing": self.testing(time.time())}
+                "testing": self.testing(time.time()),
+                "test_pattern": (self.test or {}).get("pattern") or ("frame" if self.test else "")}
 
     @property
     def bpp(self):
@@ -266,6 +267,16 @@ class Controller:
 
     def testing(self, now):
         return bool(self.test) and now < self.test["until"]
+
+    def test_frame(self, now):
+        """The frame the running test shows now: a fixed frame, or a pattern rendered for this tick."""
+        test = self.test
+        if not test:
+            return None
+        if "frame" in test:
+            return test["frame"]
+        from .patterns import render
+        return render(self, test["pattern"], now - test["start"], test["params"])
 
     def restore_mode(self):
         self.rt_asserted_at = 0.0

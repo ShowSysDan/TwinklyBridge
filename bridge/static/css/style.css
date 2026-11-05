@@ -57,6 +57,9 @@ h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
 .ctrl .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .ctrl .err { color: var(--red); font-size: 13px; margin-top: 6px; word-break: break-word; }
 .ctrl.off { opacity: .6; }
+.stepper { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.stepper input[type=number] { width: 6em; }
+input[type=color] { width: 3em; height: 30px; padding: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
 .ctrl .facts .param { color: var(--text); }
 .params { background: var(--panel); border-radius: 6px; padding: 10px 14px; margin: 0 0 12px; max-width: 640px; }
 .params strong { font-size: 18px; font-weight: 600; color: var(--amber); }
