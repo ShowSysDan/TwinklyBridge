@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.3.1** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.3.2** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -164,7 +164,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.3.1", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.3.2", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -386,12 +386,15 @@ The error stays on the controller's card and names every URL tried and the contr
 reply. The common one:
 
 - **`/xled/v2/led/layout/full -> 404 {"result":{"code":2404}}`** (and the v1 URL): the
-  controller is reachable and logged in but did not return a layout there. Either it has
-  never been camera-mapped, or its firmware keeps the map somewhere else (seen on a
-  TWPROCTRLPLC21 fw 4.1.0 that does have a map in the Twinkly app). Press **Diagnose**: it
+  controller is reachable and logged in but did not return a layout there. On Twinkly Pro
+  firmware 4.x (TWPROCTRLPLC21 fw 4.1.0) this is normal: a packet capture shows the app
+  keeps the map in the Twinkly cloud and never stores it on the controller, so there is
+  nothing to pull (details in [docs/protocol.md](docs/protocol.md)). Press **Diagnose**: it
   tries every likely map URL, read-only, and lists what answered; a line marked
-  `COORDINATES` is where the map is. Copy the result into an issue. Meanwhile **Map from
-  ports** or **Upload CSV** gives a working map. If the controller is in a group, also try
+  `COORDINATES` is where the map is. Without one, use **Map from ports** or **Upload CSV**.
+- **Mapping in the Twinkly app deletes the controller's movies.** After a camera-map edit
+  the app sends `DELETE /xled/v2/movies`. Re-upload movies from the app afterwards, or the
+  bridge's *restore previous mode when idle* has no movie to go back to. If the controller is in a group, also try
   *Pull map* on the group's master.
 - **`cannot log in`**: the controller is unreachable on TCP 80 from the bridge (VLAN /
   firewall), or it isn't a Twinkly.

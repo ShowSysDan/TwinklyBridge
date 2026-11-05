@@ -4,6 +4,16 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.3.2] - 2026-11-05
+
+- Capture of the Twinkly app viewing and camera-editing the map: the app never reads or
+  writes a layout on the controller; the map lives in the Twinkly cloud
+  (`api.illucere.com`, `illucere-storage` S3). Recorded in docs/protocol.md with the calls
+  the app does make, including `GET /xled/v2/device/config` and the
+  `DELETE /xled/v2/movies` it sends after a map edit (deletes every stored movie).
+- The Pull map 404 message now says the map is in the Twinkly cloud and points to Map from
+  ports / Upload CSV. Diagnose also reads `device/config`.
+
 ## [0.3.1] - 2026-11-05
 
 - docs/protocol.md: recorded the Diagnose result from the TWPROCTRLPLC21 fw 4.1.0 that

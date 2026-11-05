@@ -176,7 +176,7 @@ def test_map_pull_404_explains(bridge, mock):
         assert r.status_code == 502
         err = r.get_json()["error"]
         assert "/xled/v2/led/layout/full -> 404" in err and "/xled/v1/led/layout/full -> 404" in err
-        assert "camera-mapped" in err
+        assert "Twinkly cloud" in err and "Map from ports" in err
         assert client.get("/api/status").get_json()["controllers"][0]["map_error"] == err.split("Pull map failed: ")[1]
     finally:
         mock.state.no_layout = False

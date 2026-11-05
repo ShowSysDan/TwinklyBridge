@@ -93,8 +93,30 @@ showed a map for it. The bridge's Diagnose tried, logged in, under both `/xled/v
 `number_of_led`), `gestalt`, `led/out/brightness`, `movies`, `movies/current` answered 200
 with no coordinates; v2 `playlist` GET is 2405 (method not allowed); every v1 URL is 2404
 on this firmware. So the map the app shows is not always held by the controller:
-the app (or the Twinkly cloud) keeps its own copy. Re-saving the mapping from the app may
-write it back; unconfirmed.
+the app (or the Twinkly cloud) keeps its own copy.
+
+### Capture 3: the app's map is in the Twinkly cloud
+
+iOS app force-closed and reopened, browsed, map viewed, then edited with a camera capture
+(phone 10.201.115.207, controller .204, ~105 s). What the app sent **to the controller**:
+
+| Call | Count / notes |
+|---|---|
+| `POST /xled/v2/login`, `/verify` | as above |
+| `GET /xled/info`, `/xled/v2/gestalt` | ~every 10 s |
+| `GET /xled/v2/application/mode`, `led/out/brightness`, `movies`, `movies/current` | ~every 10 s |
+| `GET /xled/v2/device/config` | once: `led_drv`, `led_id`, `led_profile`, `ports[]`, `drv_params` (WS281x timings), `max_brightness` |
+| `GET /xled/v2/fw/ct0/version` (404), `fw/ct1/version` | |
+| `POST /xled/v2/application/mode` | `{"mode":"rt"}` before each mapping burst, `{"mode":"off"}` at the end |
+| `POST /xled/v2/led/rt/frame` | 22 frames, ~2 per second, during camera mapping |
+| UDP 7777 | 350 v3 datagrams: the camera-mapping patterns, white (≈250,250,250) on 1 to 36 LEDs per frame |
+| `DELETE /xled/v2/movies` | at the end of the edit: **deletes every stored movie** (code 1000) |
+
+No `led/layout` request of any kind, read or write. The layout traffic went over HTTPS to
+`api.illucere.com` and `illucere-storage.s3.eu-west-1.amazonaws.com` (Illucere is
+Twinkly's maker), so on this firmware the map lives in the Twinkly cloud and the
+controller is never given it. The bridge therefore cannot pull it; it needs a CSV, Map
+from ports, or its own camera mapping.
 
 ## Groups (several controllers)
 

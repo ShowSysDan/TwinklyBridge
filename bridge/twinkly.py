@@ -26,12 +26,13 @@ urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHa
 RT_PORT = 7777
 FRAGMENT = 900
 
-# Read-only URLs Diagnose tries, to find where a firmware keeps its map. Only led/layout/full
-# is confirmed (packet captures, xled docs); the rest are guesses worth one GET each.
+# Read-only URLs Diagnose tries, to find where a firmware keeps its map. led/layout/full is
+# the documented one; Pro fw 4.1.0 keeps the app's map in the Twinkly cloud instead (see
+# docs/protocol.md, capture 3), so on those this list mostly confirms there is none.
 PROBE_PATHS = [f"/xled/{v}/{p}" for v in ("v2", "v1") for p in (
     "led/layout/full", "led/layout", "led/layout/2d", "led/layout/3d", "layout/full", "layout",
     "led/map", "led/mapping", "mapping", "map", "led/layout/full?aspectXY=0", "led/config",
-    "summary", "gestalt", "led/out/brightness", "movies", "movies/current", "playlist",
+    "summary", "gestalt", "device/config", "led/out/brightness", "movies", "movies/current", "playlist",
 )] + ["/xled/info"]
 
 
@@ -296,9 +297,9 @@ class Controller:
                 in_group = grp.get("mode") not in (None, "", "none")
                 raise RuntimeError(
                     f"{self.name} ({self.ip}, {self.product or 'unknown model'} fw {self.fw or '?'}) returned "
-                    f"no layout at the URLs the bridge knows: {e}. Either it has never been camera-mapped, "
-                    f"or this firmware keeps the map elsewhere: press Diagnose and send the result. "
-                    f"Meanwhile Map from ports or Upload CSV gives a usable map."
+                    f"no layout: {e}. Twinkly Pro firmware 4.x keeps the map you see in the Twinkly app in "
+                    f"the Twinkly cloud, not on the controller, so there is nothing to pull. Use Map from "
+                    f"ports (exact addressing, one row per port) or Upload CSV."
                     + (f" It is in a group (mode {grp.get('mode')}); try Pull map on the group's master."
                        if in_group else "")) from e
             else:
