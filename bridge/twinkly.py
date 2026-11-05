@@ -26,6 +26,14 @@ urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHa
 RT_PORT = 7777
 FRAGMENT = 900
 
+# Read-only URLs Diagnose tries, to find where a firmware keeps its map. Only led/layout/full
+# is confirmed (packet captures, xled docs); the rest are guesses worth one GET each.
+PROBE_PATHS = [f"/xled/{v}/{p}" for v in ("v2", "v1") for p in (
+    "led/layout/full", "led/layout", "led/layout/2d", "led/layout/3d", "layout/full", "layout",
+    "led/map", "led/mapping", "mapping", "map", "led/layout/full?aspectXY=0", "led/config",
+    "summary", "gestalt", "led/out/brightness", "movies", "movies/current", "playlist",
+)] + ["/xled/info"]
+
 
 class NotFound(urllib.error.HTTPError):
     """Every path tried answered 404. `attempts` is [(url, reply body snippet), ...]."""
@@ -287,9 +295,10 @@ class Controller:
                 grp = self.group or {}
                 in_group = grp.get("mode") not in (None, "", "none")
                 raise RuntimeError(
-                    f"{self.name} ({self.ip}, {self.product or 'unknown model'} fw {self.fw or '?'}) has no "
-                    f"layout to give: {e}. Usually the controller has never been camera-mapped: map it "
-                    f"in the Twinkly app, then Pull map again, or use Upload CSV."
+                    f"{self.name} ({self.ip}, {self.product or 'unknown model'} fw {self.fw or '?'}) returned "
+                    f"no layout at the URLs the bridge knows: {e}. Either it has never been camera-mapped, "
+                    f"or this firmware keeps the map elsewhere: press Diagnose and send the result. "
+                    f"Meanwhile Map from ports or Upload CSV gives a usable map."
                     + (f" It is in a group (mode {grp.get('mode')}); try Pull map on the group's master."
                        if in_group else "")) from e
             else:
@@ -300,6 +309,54 @@ class Controller:
         self.map = [[c.get("x", 0), c.get("y", 0), c.get("z", 0)] for c in coords]
         self.map_source = f"{layout.get('source', '?')}{' synthesized' if layout.get('synthesized') else ''}"
         return len(self.map)
+
+    def map_from_ports(self):
+        """A map from the controller's own port layout: one row per port (in port order, top
+        to bottom), its LEDs left to right in chain order, on an integer grid. Not where the
+        LEDs physically are, but the pixel order and Eos addressing are exact."""
+        if not self.n_led and not self.connect():
+            raise RuntimeError(f"cannot log in to {self.ip}: {self.error}")
+        ports = self.ports or [[0, 0, self.n_led]]
+        pts = [None] * self.n_led
+        for row, (_pid, first, n) in enumerate(ports):
+            for k in range(n):
+                if first + k < self.n_led:
+                    pts[first + k] = [k, row, 0]
+        self.map = [p or [0, len(ports), 0] for p in pts]
+        self.map_source = "ports"
+        return len(self.map)
+
+    def probe(self):
+        """GET each PROBE_PATHS URL (logged in) and report what answered. Read-only."""
+        if not self.token and not self.connect():
+            raise RuntimeError(f"cannot log in to {self.ip}: {self.error}")
+        out = []
+        for path in PROBE_PATHS:
+            req = urllib.request.Request(f"http://{self.ip}{path}", headers={"X-Auth-Token": self.token})
+            row = {"path": path}
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    body = r.read(2_000_000)
+                    row["http"] = r.status
+            except urllib.error.HTTPError as e:
+                body, row["http"] = e.read(2000), e.code
+            except Exception as e:                           # noqa: BLE001
+                row["http"], body = None, b""
+                row["error"] = f"{type(e).__name__}: {e}"
+            row["bytes"] = len(body)
+            try:
+                j = json.loads(body)
+                row["code"] = result_code(j) if isinstance(j, dict) else None
+                row["keys"] = sorted(j)[:30] if isinstance(j, dict) else f"list[{len(j)}]"
+                if isinstance(j, dict) and isinstance(j.get("coordinates"), list):
+                    row["coordinates"] = len(j["coordinates"])
+            except ValueError:
+                pass
+            row["start"] = body[:160].decode("utf-8", "replace")
+            out.append(row)
+        return {"controller": self.name, "ip": self.ip, "product": self.product, "fw": self.fw,
+                "api": self.api, "n_led": self.n_led, "group": self.group, "ports": self.ports,
+                "results": out}
 
     def set_map_from_csv(self, text):
         rows = list(csv.DictReader(io.StringIO(text)))

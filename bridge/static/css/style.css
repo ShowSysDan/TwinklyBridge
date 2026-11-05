@@ -87,3 +87,10 @@ canvas { width: 100%; height: auto; display: block; background: #0f1218; border-
          max-width: min(720px, calc(100vw - 32px)); }
 .toast.show { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+.probe { position: fixed; inset: 6vh 4vw; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+         padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; z-index: 10; box-shadow: 0 10px 40px #0008; }
+.probe[hidden] { display: none; }
+.probehead { display: flex; align-items: center; gap: 8px; }
+.probehead h2 { margin: 0 auto 0 0; }
+.probe textarea { flex: 1; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+                  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; padding: 10px; white-space: pre; resize: none; }

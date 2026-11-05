@@ -242,6 +242,34 @@ def api_pull_map(cid):
                    parameters=c.parameters, totals=parameter_summary())
 
 
+@app.post("/api/controllers/<cid>/map/ports")
+def api_ports_map(cid):
+    c = get_ctrl(cid)
+    try:
+        n = c.map_from_ports()
+    except Exception as e:                                   # noqa: BLE001
+        return jsonify(error=f"Map from ports failed: {e}"), 502
+    c.map_error = ""
+    save_config()
+    log.info("map built from ports for %s by %s: %d points in %d rows, %d parameters",
+             c.name, client_ip(), n, len(c.ports) or 1, c.parameters)
+    return jsonify(ok=True, points=n, source=c.map_source, pixels=n, bpp=c.bpp,
+                   parameters=c.parameters, totals=parameter_summary())
+
+
+@app.post("/api/controllers/<cid>/probe")
+def api_probe(cid):
+    c = get_ctrl(cid)
+    try:
+        result = c.probe()
+    except Exception as e:                                   # noqa: BLE001
+        return jsonify(error=f"Diagnose failed: {e}"), 502
+    found = [r["path"] for r in result["results"] if r.get("coordinates")]
+    log.info("diagnose %s (%s) by %s: %s", c.name, c.ip, client_ip(),
+             f"coordinates at {', '.join(found)}" if found else "no URL returned coordinates")
+    return jsonify(result)
+
+
 @app.post("/api/controllers/<cid>/map/csv")
 def api_csv_map(cid):
     c = get_ctrl(cid)
