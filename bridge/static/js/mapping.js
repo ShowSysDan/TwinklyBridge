@@ -317,7 +317,7 @@ async function chooseLevel(sessionId, settle) {
   await sleep(settle);
   const dark = await grab(2, true);
   const tried = [];
-  let mask = null, L = null;
+  let mask = null, spots = null;                       // where the LEDs are (for lining photos up)
   for (const L of LEVELS) {
     await api('/api/mapping/step', {session: sessionId, step: 'white', level: L});
     await sleep(settle);
@@ -327,11 +327,11 @@ async function chooseLevel(sessionId, settle) {
     if (!mask) {                                         // where the LEDs are, from full brightness
       mask = new Uint8Array(a0.lum.length);
       for (let p = 0; p < mask.length; p++) mask[p] = a0.lum[p] - dark.lum[p] > 25 ? 1 : 0;
-      L = MapDecode.lights(a0.lum, dark.lum, a0.W, a0.H);
+      spots = MapDecode.lights(a0.lum, dark.lum, a0.W, a0.H);
     }
     // line both photos up with the first one, so a drifting hand doesn't look like flicker
-    const a = {lum: MapDecode.alignedLum(a0.lum, a0.W, a0.H, L), r: a0.r, g: a0.g, b: a0.b};
-    const b = {lum: MapDecode.alignedLum(b0.lum, b0.W, b0.H, L)};
+    const a = {lum: MapDecode.alignedLum(a0.lum, a0.W, a0.H, spots), r: a0.r, g: a0.g, b: a0.b};
+    const b = {lum: MapDecode.alignedLum(b0.lum, b0.W, b0.H, spots)};
     let n = 0, sig = 0, diff = 0, clip = 0;
     for (let p = 0; p < mask.length; p++) {
       if (!mask[p]) continue;

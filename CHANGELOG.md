@@ -4,6 +4,11 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.10.1] - 2026-11-05
+
+- Fix: every capture stopped at "Choosing the LED level" with "Assignment to constant
+  variable" (0.10.0's flicker test reused the loop's name for the light positions).
+
 ## [0.10.0] - 2026-11-05
 
 - **Stabilising: hand-held drift is corrected instead of failing the capture.** The all-on
