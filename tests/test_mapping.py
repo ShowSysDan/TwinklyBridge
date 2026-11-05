@@ -29,17 +29,18 @@ def test_gray_frames_identify_every_led():
         frames = {k: s.frame(c, f"b{k}") for k in range(s.bits)}
         inverse = {k: s.frame(c, f"i{k}") for k in range(s.bits)}
         for i in range(0, c.n_led, 7):
-            code = sum(1 << k for k in range(s.bits) if frames[k][i * 3])
-            assert all(bool(frames[k][i * 3]) != bool(inverse[k][i * 3]) for k in range(s.bits))
+            code = sum(1 << k for k in range(s.bits) if frames[k][i * 3 + 1])
+            assert all(bool(frames[k][i * 3 + 1]) != bool(inverse[k][i * 3 + 1]) for k in range(s.bits))
             v, g = code, 0
             while v:
                 g ^= v
                 v >>= 1
             assert g - 1 == s.offsets[c.id] + i
-    assert s.frame(a, "red")[:3] == bytes([100, 0, 0]) and s.frame(a, "blue")[3:6] == bytes([0, 0, 100])
-    assert set(s.frame(a, "black")) == {0} and set(s.frame(a, "white")) == {100}
+    # full-on channels (255, so no PWM flicker), whatever the level: coding frames in green
+    assert s.frame(a, "red")[:3] == bytes([255, 0, 0]) and s.frame(a, "blue")[3:6] == bytes([0, 0, 255])
+    assert set(s.frame(a, "black")) == {0} and s.frame(a, "white")[:6] == bytes([0, 255, 0, 0, 255, 0])
     w = ctrl(2, 250, "RGBW")
-    assert mapping.Session([w], 90).frame(w, "white")[:4] == bytes([90, 90, 90, 90])
+    assert mapping.Session([w], 90).frame(w, "white")[:4] == bytes([0, 0, 255, 0])          # W R G B
     with pytest.raises(ValueError):
         s.frame(a, "b99")
 
@@ -61,14 +62,21 @@ def test_fill_gaps_and_report():
     assert sofar["notes"] == ["50 not seen yet"]
 
 
-def run_sim():
+def run_sim(mode="normal"):
     node = shutil.which("node")
     if not node:
         pytest.skip("node not installed")
     out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "mapdecode_sim.js"),
-                          os.path.join(ROOT, "bridge", "static", "js", "mapdecode.js")],
+                          os.path.join(ROOT, "bridge", "static", "js", "mapdecode.js"), mode],
                          capture_output=True, text=True, timeout=120, check=True)
     return json.loads(out.stdout)
+
+
+def test_decoder_on_a_harsh_synthetic_camera():
+    """Bloom and clipping, stripes across the picture, a floor reflection of every LED, more
+    noise and exposure drift between photos: fewer LEDs, but none put in the wrong place."""
+    d = run_sim("hard")
+    assert d["stats"]["found"] > 1100 and d["wrong"] == 0 and d["meanErr"] < 0.6
 
 
 def test_decoder_on_synthetic_camera():
@@ -110,3 +118,26 @@ def test_mapping_session_through_the_api(bridge, mock):
     finally:
         client.post("/api/mapping/stop")
         state.CONTROLLERS[cid].map, state.CONTROLLERS[cid].map_source = saved
+
+
+def test_capture_photos_upload_and_zip(bridge, tmp_path, monkeypatch):
+    import io
+    import zipfile
+    client, appmod, state = bridge
+    monkeypatch.setattr(state, "CONFIG_PATH", str(tmp_path / "bridge_config.json"))
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 100
+    assert client.post("/api/mapping/captures/2026-11-05T10-00-00_90deg/white.png", data=png,
+                       content_type="image/png").status_code == 200
+    assert client.post("/api/mapping/captures/2026-11-05T10-00-00_90deg/capture.json", data=b'{"a": 1}',
+                       content_type="application/json").status_code == 200
+    lst = client.get("/api/mapping/captures").get_json()
+    assert lst[0]["name"] == "2026-11-05T10-00-00_90deg" and lst[0]["files"] == 2 and lst[0]["complete"]
+    z = zipfile.ZipFile(io.BytesIO(client.get("/api/mapping/captures/2026-11-05T10-00-00_90deg.zip").data))
+    assert sorted(z.namelist()) == ["2026-11-05T10-00-00_90deg/capture.json", "2026-11-05T10-00-00_90deg/white.png"]
+    # names are checked: no paths out of instance/captures, only png / json, right content type
+    for url in ("/api/mapping/captures/..%2F..%2Fetc/x.png", "/api/mapping/captures/ok/..png",
+                "/api/mapping/captures/ok/a.exe", "/api/mapping/captures/bad name/a.png"):
+        assert client.post(url, data=png, content_type="image/png").status_code in (400, 404, 405)
+    assert client.post("/api/mapping/captures/ok/a.png", data=png, content_type="text/plain").status_code == 415
+    assert client.delete("/api/mapping/captures/2026-11-05T10-00-00_90deg").get_json()["ok"]
+    assert client.get("/api/mapping/captures").get_json() == []

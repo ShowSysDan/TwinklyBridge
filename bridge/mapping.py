@@ -37,6 +37,11 @@ def gray(v):
 
 
 class Session:
+    """One capture. Coding frames light LEDs full on in one channel (green, 255): a channel at
+    255 isn't dimmed by PWM, so a phone's rolling shutter can't catch it half-off (dark bands
+    across the photo), and phone sensors are most sensitive to green. `level` only sets the
+    coverage colours shown between captures."""
+
     def __init__(self, ctrls, level=128):
         self.id = secrets.token_hex(6)
         self.ctrls = list(ctrls)
@@ -47,7 +52,11 @@ class Session:
             g += c.n_led
         self.total = g
         self.bits = max(1, self.total.bit_length())        # codes 1..total
-        self.steps = ["black", "white", "red", "green", "blue"] + [s for k in range(self.bits) for s in (f"b{k}", f"i{k}")] + ["white_end"]
+        # b<k>/i<k>: bit k and its inverse. (No parity pair: in Gray code chain neighbours differ
+        # in one bit, so their parity always differs and every pixel between two neighbouring
+        # LEDs would fail it - tested: it lost 40% of LEDs on densely packed strings.)
+        self.steps = (["black", "white", "red", "green", "blue"]
+                      + [s for k in range(self.bits) for s in (f"b{k}", f"i{k}")] + ["white_end"])
         self.started = time.time()
 
     def lit(self, g, step):
@@ -61,13 +70,12 @@ class Session:
     def frame(self, c, step):
         if step not in self.steps:
             raise ValueError(f"unknown step {step!r}")
-        base, v = self.offsets[c.id], self.level
+        base = self.offsets[c.id]
         if step in ("red", "green", "blue"):
             k = ("red", "green", "blue").index(step)
-            return pack(c, [tuple(v if j == k else 0 for j in range(3))] * c.n_led)
+            return pack(c, [tuple(255 if j == k else 0 for j in range(3))] * c.n_led)
         on = [self.lit(base + i, step) for i in range(c.n_led)]
-        return pack(c, [(v, v, v) if x else (0, 0, 0) for x in on],
-                    [v if x else 0 for x in on] if c.bpp == 4 else None)
+        return pack(c, [(0, 255, 0) if x else (0, 0, 0) for x in on])
 
     def coverage(self, c, now, before, level=None):
         """What the installation shows between captures: green = found in the capture just

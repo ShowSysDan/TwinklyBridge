@@ -217,6 +217,14 @@ api('/api/mapping/info').then(m => {
     (m.cert_missing_ips.length ? `<br><span class="bad">The certificate doesn't list ${esc(m.cert_missing_ips.join(', '))} ` +
       `(this machine's IP changed?): make a new one with NEW_CERT=1 sudo bash install.sh, or python tools/make_cert.py --force, then restart.</span>` : '');
 }).catch(() => { $('#mapInfo').textContent = 'unavailable'; });
+function loadCaptures() {
+  api('/api/mapping/captures').then(list => {
+    $('#captures').innerHTML = !list.length ? '' : '<p style="margin:10px 0 4px">Photos sent from the phone (download to look at what the camera saw):</p>' +
+      list.map(c => `<div><a href="/api/mapping/captures/${encodeURIComponent(c.name)}.zip">${esc(c.name)}</a>
+        ${c.files} files, ${(c.bytes / 1e6).toFixed(1)} MB${c.complete ? '' : ' (incomplete)'}</div>`).join('');
+  }).catch(() => {});
+}
+loadCaptures(); setInterval(loadCaptures, 15000);
 api('/api/patterns').then(p => {
   patterns = p;
   const chain = Object.keys(p).filter(k => !p[k].startsWith('On the map')), onMap = Object.keys(p).filter(k => p[k].startsWith('On the map'));

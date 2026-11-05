@@ -161,27 +161,124 @@ function progress(i, n, label) {
   $('#overlay').textContent = label;
 }
 
+// A small, fast grab (luminance, 240 px wide): for timing the camera's lag.
+const tinyCanvas = document.createElement('canvas');
+const tctx = tinyCanvas.getContext('2d', {willReadFrequently: true});
+async function tinyLum() {
+  const v = $('#video'), W = 240, H = Math.max(1, Math.round(v.videoHeight * 240 / v.videoWidth));
+  tinyCanvas.width = W; tinyCanvas.height = H;
+  await nextVideoFrame(v);
+  tctx.drawImage(v, 0, 0, W, H);
+  const d = tctx.getImageData(0, 0, W, H).data, out = new Float32Array(W * H);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) out[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+  return out;
+}
+// How much brighter than `dark`: the sum of per-pixel increases beyond noise. LEDs are small
+// dots in a big picture, so the picture's average hardly moves; this counts only the dots.
+function brighter(cur, dark) {
+  let s = 0;
+  for (let p = 0; p < cur.length; p++) { const d = cur[p] - dark[p] - 10; if (d > 0) s += d; }
+  return s;
+}
+// How long from the bridge saying "frame is out" to the camera showing it: switch black -> all
+// on and watch the LEDs appear. The phone's camera pipeline adds 100-400 ms, varying by phone
+// and light; waiting less than that photographs the previous pattern.
+// Wait until the camera picture stops changing, up to `max` ms; returns it. Only call it once
+// the camera has had time to show the last switch: while it lags, the old picture is still too.
+async function settled(max = 4000) {
+  const t0 = performance.now();
+  let prev = await tinyLum(), still = 0;
+  while (performance.now() - t0 < max) {
+    const cur = await tinyLum();
+    let d = 0;
+    for (let p = 0; p < cur.length; p++) { const x = Math.abs(cur[p] - prev[p]) - 10; if (x > 0) d += x; }
+    still = d < 20 * cur.length / 21600 ? still + 1 : 0;
+    prev = cur;
+    if (still >= 4) break;
+  }
+  return prev;
+}
+async function cameraLag(sessionId) {
+  // the LEDs went dark at start; the camera shows it some unknown time later, and until then
+  // its picture is just as still, so first give it longer than any phone's lag
+  await sleep(1200);
+  const dark = await settled(1500);
+  const t0 = performance.now();
+  await api('/api/mapping/step', {session: sessionId, step: 'white'});
+  const t1 = performance.now();
+  const samples = [];
+  while (performance.now() - t1 < 2500) samples.push([performance.now() - t1, brighter(await tinyLum(), dark)]);
+  const lit = Math.max(...samples.map(s => s[1]));
+  if (lit < 40 * dark.length / 21600)          // about two LEDs' worth at 240 x 90
+    throw new Error('The camera sees no change when the LEDs come on: point it at the installation, darken the room, and check the controllers are ticked.');
+  const reach = samples.find(s => s[1] >= 0.9 * lit);
+  return {ms: Math.round(reach[0]), roundTrip: Math.round(t1 - t0)};
+}
+// Ask the camera to stop adjusting itself (Android Chrome supports this; iOS Safari ignores it).
+async function lockCamera() {
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities) return [];
+  const caps = track.getCapabilities(), want = {}, locked = [];
+  for (const [k, label] of [['exposureMode', 'exposure'], ['whiteBalanceMode', 'white balance'], ['focusMode', 'focus']])
+    if (caps[k] && caps[k].includes('manual')) { want[k] = 'manual'; locked.push(label); }
+  if (!locked.length) return [];
+  try { await track.applyConstraints({advanced: [want]}); return locked; } catch { return []; }
+}
+async function unlockCamera() {
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities) return;
+  const caps = track.getCapabilities(), want = {};
+  for (const k of ['exposureMode', 'whiteBalanceMode', 'focusMode'])
+    if (caps[k] && caps[k].includes('continuous')) want[k] = 'continuous';
+  try { await track.applyConstraints({advanced: [want]}); } catch {}
+}
+
 $('#runBtn').onclick = async () => {
   const ids = [...document.querySelectorAll('#ctrlList input:checked')].map(i => i.value);
   if (!ids.length) { toast('Tick at least one controller'); return; }
   $('#runBtn').disabled = true; cancelled = false; decoded = null;
-  const settle = Math.max(50, +$('#settle').value || 300);
+  const minWait = Math.max(50, +$('#settle').value || 300);
   const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle: +$('#angle').value || 0};
+  const log = {retakes: {}, started: new Date().toISOString(), ua: navigator.userAgent};
   try {
     progress(0, 1, 'Taking over the controllers ...');
     session = await api('/api/mapping/start', {ids, level: +$('#level').value});
     sensor.maxRot = 0;
-    const shots = {}, steps = session.steps;
-    for (let i = 0; i < steps.length; i++) {
+    progress(0, 1, 'Timing the camera ...');
+    const lag = await cameraLag(session.session);
+    const settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
+    log.lag = lag; log.settle = settle;
+    // all-on first: let exposure settle on the LEDs, then lock it (where the phone allows)
+    await sleep(settle);
+    const shots = {};
+    shots.white = await grab(4, true);
+    log.locked = await lockCamera();
+    await sleep(150);
+    const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
+    let prev = shots.white;
+    for (let i = 0; i < order.length; i++) {
       if (cancelled) return;
-      const step = steps[i];
-      progress(i, steps.length, `Hold still ... ${i + 1} / ${steps.length}`);
+      const step = order[i];
+      progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}   (camera lag ${lag.ms} ms)`);
       await api('/api/mapping/step', {session: session.session, step});
       await sleep(settle);
-      shots[step] = await grab(step === 'black' || step === 'white' ? 4 : 2,
-                               ['black', 'white', 'red', 'green', 'blue'].includes(step));
+      const colour = ['black', 'red', 'green', 'blue'].includes(step);
+      let shot = await grab(step === 'black' ? 4 : 2, colour);
+      // a photo that hardly differs from the last one was taken before the LEDs changed
+      // (camera lag): wait and take it again
+      if (shots.black && step !== 'black') {
+        for (let tries = 0; tries < 4 && MapDecode.change(shot.lum, prev.lum, shots.white.lum, shots.black.lum) < 0.12; tries++) {
+          log.retakes[step] = tries + 1;
+          await sleep(settle / 2);
+          shot = await grab(2, colour);
+        }
+        if (MapDecode.change(shot.lum, prev.lum, shots.white.lum, shots.black.lum) < 0.12)
+          throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
+      }
+      shots[step] = prev = shot;
     }
-    progress(steps.length, steps.length, 'Working it out ...');
+    await unlockCamera();
+    progress(order.length + 1, order.length + 1, 'Working it out ...');
     await sleep(30);
     const W = shots.black.W, H = shots.black.H, bits = [];
     for (let k = 0; k < session.bits; k++) bits.push([shots['b' + k].lum, shots['i' + k].lum]);
@@ -189,12 +286,15 @@ $('#runBtn').onclick = async () => {
                                 colour: {black: shots.black, red: shots.red, green: shots.green, blue: shots.blue}},
                                session.total);
     decoded.photo = shots.white;
+    decoded.shots = shots;
+    decoded.log = log;
     decoded.meta = {...atStart, moved: decoded.stats.cameraMoved || sensor.maxRot > 25};
     await api('/api/mapping/step', {session: session.session, step: 'white'}).catch(() => {});
     lastReport = await api('/api/mapping/save', {session: session.session, points: decoded.points,
                                                  colours: decoded.colours, save: false}).catch(e => ({error: e.message}));
     showResult();
   } catch (e) {
+    await unlockCamera();
     toast(e.message); $('#overlay').textContent = e.message;
     $('#runBtn').disabled = false; $('#progressWrap').hidden = true;
   }
@@ -210,7 +310,6 @@ function stopCamera() {
 }
 
 // ---------------------------------------------------------------- one capture's result
-const PORT_COLOURS = ['#ff4d4d', '#4dff6a', '#4da3ff', '#ffb84d', '#ff4dff', '#4dffff', '#ffff4d', '#a64dff'];
 function portTable(rep, sofar) {
   return rep.map(c => `<h3>${esc(c.name)}: ${c.found} seen${sofar ? ' so far' : `, ${c.filled} to fill`}</h3>
     <table class="rep"><tr><th>Port</th><th>Set</th><th>Seen</th><th>${sofar ? 'Last seen' : 'Ends at'}</th><th>Colours</th><th></th></tr>
@@ -233,8 +332,8 @@ function showResult() {
     for (let i = 0; i < c.n_led; i++, g++) {
       const p = decoded.pixels[g];
       if (!p) continue;
-      const pi = ports.findIndex(([, first, n]) => i >= first && i < first + n);
-      ctx.fillStyle = PORT_COLOURS[(pi < 0 ? 0 : pi) % PORT_COLOURS.length];
+      const pi = ports.findIndex(([, first, n]) => i >= first && i < first + n), port = ports[pi < 0 ? 0 : pi];
+      ctx.fillStyle = `hsl(${Math.round(300 * (i - port[1]) / Math.max(1, port[2] - 1))}, 95%, 58%)`;   // red -> violet along the string
       ctx.beginPath(); ctx.arc(p[0], p[1], Math.max(1.2, ph.W / 500), 0, Math.PI * 2); ctx.fill();
     }
   }
@@ -244,12 +343,48 @@ function showResult() {
     decoded.meta.moved ? '<strong class="bad">The phone seems to have moved during the capture: try again with it held still.</strong>' : '',
     decoded.meta.pitch !== null && Math.abs(decoded.meta.pitch) > 15 ? `<strong class="bad">The phone was tilted ${Math.round(decoded.meta.pitch)}&deg;: for 3D, hold it upright.</strong>` : '',
     s.found < s.total * 0.5 ? '<strong class="bad">Less than half found: darken the room, get everything in frame, raise the brightness.</strong>' : '',
-    'Dots are coloured by port.',
+    'Each string runs red &rarr; yellow &rarr; green &rarr; blue &rarr; violet from its first LED: a right string is one smooth rainbow; a dot in the wrong colour is a misread LED.',
+    `Camera lag ${decoded.log.lag.ms} ms, waited ${decoded.log.settle} ms per pattern` +
+      (Object.keys(decoded.log.retakes).length ? `, ${Object.keys(decoded.log.retakes).length} photos retaken` : '') +
+      (decoded.log.locked.length ? `, locked ${decoded.log.locked.join(', ')}` : '') + '.',
   ].filter(Boolean).join('<br>');
   const rep = lastReport && lastReport.controllers;
   $('#report').innerHTML = rep ? portTable(rep) : `<p class="bad">${esc((lastReport && lastReport.error) || 'no report')}</p>`;
   $('#keepBtn').disabled = !rep;
+  $('#sendBtn').disabled = false; $('#sendBtn').textContent = 'Send photos to the bridge';
 }
+// Send this capture's photos to the bridge (instance/captures/), to look at what the camera saw.
+function pngOf(shot) {
+  const cv = document.createElement('canvas'); cv.width = shot.W; cv.height = shot.H;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(shot.W, shot.H);
+  for (let p = 0; p < shot.W * shot.H; p++) {
+    img.data[4 * p] = shot.r ? shot.r[p] : shot.lum[p]; img.data[4 * p + 1] = shot.g ? shot.g[p] : shot.lum[p];
+    img.data[4 * p + 2] = shot.b ? shot.b[p] : shot.lum[p]; img.data[4 * p + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return new Promise(res => cv.toBlob(res, 'image/png'));
+}
+$('#sendBtn').onclick = async () => {
+  const btn = $('#sendBtn'); btn.disabled = true;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + `_${Math.round(decoded.meta.angle)}deg`;
+  try {
+    const names = Object.keys(decoded.shots);
+    for (let i = 0; i < names.length; i++) {
+      btn.textContent = `Sending ${i + 1} / ${names.length + 1} ...`;
+      const r = await fetch(`/api/mapping/captures/${stamp}/${names[i]}.png`,
+                            {method: 'POST', headers: {'Content-Type': 'image/png'}, body: await pngOf(decoded.shots[names[i]])});
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    }
+    const info = {session: session, stats: decoded.stats, log: decoded.log, meta: decoded.meta,
+                  size: [decoded.photo.W, decoded.photo.H], points: decoded.points, colours: decoded.colours,
+                  report: lastReport, screen: [screen.width, screen.height, devicePixelRatio]};
+    const r = await fetch(`/api/mapping/captures/${stamp}/capture.json`,
+                          {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(info)});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    btn.textContent = 'Sent to the bridge';
+    toast(`Saved on the bridge as ${stamp}: download it from the desk page, Camera mapping panel.`, 7000);
+  } catch (e) { btn.textContent = 'Send photos to the bridge'; btn.disabled = false; toast(`Sending failed: ${e.message}`); }
+};
 $('#retryBtn').onclick = () => { show('cam'); $('#runBtn').disabled = false; $('#progressWrap').hidden = true;
                                  $('#overlay').textContent = 'Frame the whole installation, then hold still.'; };
 $('#keepBtn').onclick = async () => {

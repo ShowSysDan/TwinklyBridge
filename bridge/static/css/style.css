@@ -143,3 +143,4 @@ table.rep tr.warn td { color: var(--amber); }
 .mobbar.three { grid-template-columns: 2fr 1fr 1fr; }
 .sweeps { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .g { color: var(--green); } .b { color: var(--blue); } .r { color: var(--red); }
+.mobbar.one { grid-template-columns: 1fr; }

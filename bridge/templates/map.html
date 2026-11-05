@@ -25,8 +25,10 @@
   <h2>1. What to map</h2>
   <div id="ctrlList" class="checks"></div>
   <div id="viewsBox"></div>
-  <label class="row">LED brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
-  <label class="row">Wait after each pattern (ms) <input type="number" id="settle" value="300" min="50" max="3000" step="50"></label>
+  <label class="row">Coverage colours brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
+  <label class="row">Shortest wait after each pattern (ms) <input type="number" id="settle" value="150" min="50" max="3000" step="50"></label>
+  <p class="hint">The patterns themselves are full green (no dimming, so no flicker in the photos). The wait is
+    measured at the start of every capture from how long the camera takes to show a change; this is only the minimum.</p>
   <p class="hint">Darken the room if you can. Hold the phone still for each capture (about 20 s): a tripod, or lean it
     on something. For a flat piece one capture from the front is enough. For a 3D piece (tree, sphere) capture it
     from several sides, walking around it to your right, about 45&deg; apart (8 views all round is best; 4 is the
@@ -63,6 +65,8 @@
     <button id="keepBtn" class="big primary">Keep this view</button>
     <button id="retryBtn" class="big">Try again</button>
   </div>
+  <div class="mobbar one"><button id="sendBtn" class="big">Send photos to the bridge</button></div>
+  <p class="hint center">Sends every photo of this capture to the bridge, to look at what the camera saw when a map comes out wrong.</p>
 </section>
 
 <section id="kept" hidden>
