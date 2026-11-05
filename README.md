@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.2.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.3.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -164,7 +164,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.2.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.3.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -368,8 +368,10 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 
 1. **Add controllers** by IP. The bridge reads LED count, profile and port layout.
 2. **Pull map** on each: fetches the camera layout stored on the controller (`layout/full`).
-   Or upload a CSV with `index,x,y,z` columns. The [parameter count](#parameter-count)
-   appears as soon as the map is in.
+   Or upload a CSV with `index,x,y,z` columns, or press **Map from ports** for a map built
+   from the controller's port layout (one row per port, LEDs in chain order: exact
+   addressing, not physical positions). The [parameter count](#parameter-count) appears
+   as soon as a map is in.
 3. **Patch all, new universe each**: every controller gets contiguous universes, 170 pixels
    (510 channels) per universe, ordered by the controllers' group offset when they report one.
 4. **Export for Eos**: pick a flatten mode for 3D maps (front, top, side, or unwrap around the
@@ -383,12 +385,14 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 The error stays on the controller's card and names every URL tried and the controller's
 reply. The common one:
 
-- **`/xled/v2/led/layout/full -> 404` and `/xled/v1/led/layout/full -> 404`**: the
-  controller answered, but has no layout to give. Usually it has never been camera-mapped:
-  map it in the Twinkly app (on the phone, on the same network), then *Pull map* again. If
-  the controller is in a group, pull from the group's master. Otherwise export a map with
-  `tools/twinkly_layout.py` from another controller or build an `index,x,y,z` CSV and use
-  *Upload CSV*.
+- **`/xled/v2/led/layout/full -> 404 {"result":{"code":2404}}`** (and the v1 URL): the
+  controller is reachable and logged in but did not return a layout there. Either it has
+  never been camera-mapped, or its firmware keeps the map somewhere else (seen on a
+  TWPROCTRLPLC21 fw 4.1.0 that does have a map in the Twinkly app). Press **Diagnose**: it
+  tries every likely map URL, read-only, and lists what answered; a line marked
+  `COORDINATES` is where the map is. Copy the result into an issue. Meanwhile **Map from
+  ports** or **Upload CSV** gives a working map. If the controller is in a group, also try
+  *Pull map* on the group's master.
 - **`cannot log in`**: the controller is unreachable on TCP 80 from the bridge (VLAN /
   firewall), or it isn't a Twinkly.
 - **`bridge: ...`**: the error came from the bridge itself, not the controller (e.g. the
@@ -523,6 +527,8 @@ DELETE /api/controllers/<id>
 POST /api/controllers/<id>/connect
 POST /api/patch/auto                     {"mode": "aligned"|"packed", "start_universe": 1, "order": "group"|"added"}
 POST /api/controllers/<id>/map/pull      -> {"points", "source", "pixels", "bpp", "parameters", "totals"}
+POST /api/controllers/<id>/map/ports     map from the port layout: one row per port, LEDs in chain order
+POST /api/controllers/<id>/probe         Diagnose: GET each likely map URL (read-only), report status / code / keys
 POST /api/controllers/<id>/map/csv       multipart file= (columns index,x,y,z)
 DELETE /api/controllers/<id>/map
 GET  /api/controllers/<id>/map.csv

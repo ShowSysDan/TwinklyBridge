@@ -184,6 +184,35 @@ def test_map_pull_404_explains(bridge, mock):
     assert client.get("/api/status").get_json()["controllers"][0]["map_error"] == ""
 
 
+def test_map_from_ports_and_diagnose(bridge, mock):
+    client, appmod, state = bridge
+    cid = client.get("/api/status").get_json()["controllers"][0]["id"]
+    saved = state.CONTROLLERS[cid].map, state.CONTROLLERS[cid].map_source
+    mock.state.no_layout = True
+    try:
+        d = client.post(f"/api/controllers/{cid}/probe").get_json()
+        by = {r["path"]: r for r in d["results"]}
+        assert by["/xled/v2/led/layout/full"]["http"] == 404 and by["/xled/v2/led/layout/full"]["code"] == 2404
+        assert by["/xled/v2/gestalt"]["http"] == 200 and "number_of_led" in by["/xled/v2/gestalt"]["keys"]
+        mock.state.no_layout = False
+        d = client.post(f"/api/controllers/{cid}/probe").get_json()
+        assert {r["path"]: r for r in d["results"]}["/xled/v2/led/layout/full"]["coordinates"] == N
+
+        r = client.post(f"/api/controllers/{cid}/map/ports").get_json()
+        assert r["ok"] and r["points"] == N and r["source"] == "ports" and r["parameters"] == 3 * N
+        c = state.CONTROLLERS[cid]
+        assert c.map[0] == [0, 0, 0] and c.map[249] == [249, 0, 0] and c.map[250] == [0, 1, 0] and c.map[-1] == [249, 4, 0]
+        # whole-number grid -> placed exactly: 250 x 5 cells, nothing nudged, LED 251 at x=2,y=2
+        rows = list(csv.DictReader(io.StringIO("\n".join(
+            client.get("/api/export/eos_pixelmap.csv").data.decode().splitlines()[1:-1]))))
+        assert max(int(x["LOCATION_X"]) for x in rows) == 250 and max(int(x["LOCATION_Y"]) for x in rows) == 5
+        assert (rows[251]["LOCATION_X"], rows[251]["LOCATION_Y"]) == ("2", "2")
+        assert b"0 nudged" in client.get("/api/export/eos_preview.svg").data
+    finally:
+        mock.state.no_layout = False
+        state.CONTROLLERS[cid].map, state.CONTROLLERS[cid].map_source = saved
+
+
 def test_bridge_404_is_json(bridge):
     client, appmod, state = bridge
     r = client.post("/api/controllers/nope/map/pull")

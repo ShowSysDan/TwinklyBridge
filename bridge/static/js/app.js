@@ -46,6 +46,8 @@ function renderControllers() {
       </div>
       <div class="actions">
         <button data-a="pull">Pull map</button>
+        <button data-a="ports" title="One row per port, LEDs in chain order: exact addressing, not physical positions">Map from ports</button>
+        <button data-a="probe" title="Ask the controller where its map is (read-only) and show the answers">Diagnose</button>
         <button data-a="csv">Upload CSV</button>
         ${c.has_map ? `<button data-a="dl">Download CSV</button>` : ''}
         <button data-a="solid">Flash red</button>
@@ -67,6 +69,18 @@ function renderControllers() {
             toast(`Pulled ${r.points} points (${r.source}): ${r.parameters} parameters, ${r.totals.parameters} across all maps`); await loadMaps(); }
       catch (e) { toast(e.message); } refresh();
     };
+    el.querySelector('[data-a=ports]').onclick = async b => {
+      if (c.has_map && !confirm(`Replace ${c.name}'s map (${c.map_source}) with one built from its ports?`)) return;
+      try { const r = await api(`/api/controllers/${c.id}/map/ports`, {method: 'POST'});
+            toast(`Map from ports: ${r.points} points, ${r.parameters} parameters`); await loadMaps(); }
+      catch (e) { toast(e.message); } refresh();
+    };
+    el.querySelector('[data-a=probe]').onclick = async b => {
+      b.target.disabled = true; toast('Asking the controller ...');
+      try { showProbe(await api(`/api/controllers/${c.id}/probe`, {method: 'POST'})); }
+      catch (e) { toast(e.message); }
+      b.target.disabled = false;
+    };
     const file = el.querySelector('[data-a=csvfile]');
     el.querySelector('[data-a=csv]').onclick = () => file.click();
     file.onchange = async () => {
@@ -85,6 +99,16 @@ function renderControllers() {
     };
     host.appendChild(el);
   }
+}
+function showProbe(r) {
+  const lines = [`${r.controller} ${r.ip} ${r.product} fw ${r.fw} api ${r.api}, ${r.n_led} LEDs`,
+                 `group ${JSON.stringify(r.group)}  ports ${JSON.stringify(r.ports)}`, ''];
+  for (const x of r.results)
+    lines.push(`${String(x.http ?? 'ERR').padEnd(4)} ${x.path.padEnd(36)} ${x.code !== undefined ? 'code ' + x.code : ''}` +
+               `${x.coordinates ? '  COORDINATES ' + x.coordinates : ''}${x.keys ? '  keys ' + JSON.stringify(x.keys) : ''}` +
+               `${x.error ? '  ' + x.error : ''}${!x.keys && x.start ? '  ' + x.start.replace(/\s+/g, ' ') : ''}`);
+  $('#probeText').value = lines.join('\n');
+  $('#probe').hidden = false; $('#probeText').select();
 }
 async function test(cid, body) {
   try { await api(`/api/controllers/${cid}/test`, {method: 'POST', body: JSON.stringify(body)}); }
@@ -105,7 +129,8 @@ async function refresh() {
   $('#ddpText').textContent = dd.error ? `DDP: ${dd.error}` : dd.active ? `DDP ${dd.rate} packets/s` : dd.enabled ? 'DDP listening on 4048' : 'DDP off';
   $('#fpsText').textContent = status.output.fps_actual;
   renderParameters(status.parameters);
-  if (document.activeElement && document.activeElement.closest('#ctrls')) return;   // don't clobber an edit in progress
+  const ae = document.activeElement;                      // don't clobber an edit in progress (buttons don't count)
+  if (ae && ae.closest('#ctrls') && ae.matches('input, select')) return;
   renderControllers();
   if (!settingsLoaded) {
     const s = status.settings;
@@ -237,5 +262,10 @@ $('#eosMap').onclick = () => eosDownload('/api/export/eos_pixelmap.csv');
 $('#eosPatch').onclick = () => eosDownload('/api/export/eos_patch.csv');
 $('#eosPreview').onclick = () => window.open('/api/export/eos_preview.svg?' + eosQuery(), '_blank');
 
+$('#probeClose').onclick = () => { $('#probe').hidden = true; };
+$('#probeCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('#probeText').value); toast('Copied'); }
+  catch { $('#probeText').select(); document.execCommand('copy'); toast('Copied'); }
+};
 refresh(); setInterval(refresh, 1000);
 loadMaps().then(() => { draw(); pollFrames(); });

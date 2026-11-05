@@ -31,6 +31,13 @@ def grid_place(fpts, max_cells=200, width=0):
     xs = [p[0] for p in fpts]
     ys = [p[1] for p in fpts]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    # Already on a whole-number grid with one LED per cell (Map from ports, or a CSV in cell
+    # units): place it exactly instead of rescaling.
+    if not width and all(float(v).is_integer() for v in xs + ys):
+        W, H = int(x1 - x0) + 1, int(y1 - y0) + 1
+        cells = {i: (int(x - x0), int(y - y0)) for i, (x, y) in enumerate(fpts)}
+        if W <= 2000 and H <= 2000 and len(set(cells.values())) == len(cells):
+            return W, H, cells, 0
     aspect = ((x1 - x0) or 1e-9) / ((y1 - y0) or 1e-9)
     n = len(fpts)
     size = width if width else max(8, int(math.sqrt(n) * 1.5))

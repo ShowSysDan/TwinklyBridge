@@ -109,6 +109,12 @@
     </div>
   </section>
 </main>
+<div class="probe" id="probe" hidden>
+  <div class="probehead"><h2>Diagnose: what the controller answered</h2>
+    <button id="probeCopy">Copy</button> <button id="probeClose" class="quiet">Close</button></div>
+  <p class="hint">Read-only requests. Copy this and send it to whoever is looking at the map problem.</p>
+  <textarea id="probeText" readonly spellcheck="false"></textarea>
+</div>
 <div class="toast" id="toast"></div>
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

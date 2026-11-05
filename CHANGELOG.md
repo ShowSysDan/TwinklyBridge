@@ -4,6 +4,25 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.3.0] - 2026-11-05
+
+- **Diagnose** button on each controller: logs in and GETs every likely map URL
+  (`led/layout/full`, `led/layout`, `layout`, `led/map`, `mapping`, ... under v2 and v1,
+  plus `gestalt`, `summary`, `movies`), read-only, and shows status, Twinkly result code,
+  reply keys and whether coordinates came back, in a box you can copy. For controllers
+  that have a map in the Twinkly app but answer 2404 on `led/layout/full`
+  (seen on a TWPROCTRLPLC21 fw 4.1.0). Also `POST /api/controllers/<id>/probe`.
+- **Map from ports** button: builds a map from the controller's own port layout, one row
+  per port, LEDs in chain order (`POST /api/controllers/<id>/map/ports`). Exact pixel order
+  and Eos addressing, not physical positions; gives a working pixel map and parameter count
+  until a camera map can be pulled.
+- Eos export places maps that are already on a whole-number grid (Map from ports, or a CSV
+  in cell units) exactly, e.g. 250 x 5 cells, instead of rescaling and nudging them.
+- The Pull map 404 message points to Diagnose / Map from ports instead of assuming the
+  controller was never mapped.
+- Fix: a controller's card did not refresh after pressing one of its buttons (the page
+  skipped redraws while any element in the list had focus, not just an input).
+
 ## [0.2.1] - 2026-11-05
 
 - **Pull map 404s now say what happened.** When the controller answers 404 to the layout
