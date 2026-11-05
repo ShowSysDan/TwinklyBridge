@@ -358,28 +358,37 @@ async function unlockCamera() {
   try { await track.applyConstraints({advanced: [want]}); } catch {}
 }
 
-$('#runBtn').onclick = async () => {
-  const ids = [...document.querySelectorAll('#ctrlList input:checked')].map(i => i.value);
-  if (!ids.length) { toast('Tick at least one controller'); return; }
-  $('#runBtn').disabled = true; cancelled = false; decoded = null;
+// One capture (one view): measure the camera (unless `reuse` gives the lag / wait / level from
+// an earlier capture in the same spot and light), photograph every pattern, decode. Returns the
+// decoded result (also kept in `decoded`) with the port report in `lastReport`; throws on failure.
+let calib = null;
+async function captureView(ids, angle, reuse) {
+  cancelled = false; decoded = null;
   await stopAim();
   const minWait = Math.max(50, +$('#settle').value || 300);
-  const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle: +$('#angle').value || 0};
+  const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle};
   const log = {retakes: {}, started: new Date().toISOString(), ua: navigator.userAgent};
   try {
     progress(0, 1, 'Taking over the controllers ...');
     session = await api('/api/mapping/start', {ids, level: +$('#level').value});
     sensor.maxRot = 0;
-    progress(0, 1, 'Timing the camera ...');
-    const lag = await cameraLag(session.session);
-    const settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
-    log.lag = lag; log.settle = settle;
-    progress(0, 1, 'Choosing the LED level ...');
-    const lv = await chooseLevel(session.session, settle);
-    log.level = lv;
-    aim.blinkLevel = lv.level;
+    let lag, settle, level;
+    if (reuse) {
+      ({lag, settle, level} = reuse);
+      await api('/api/mapping/step', {session: session.session, step: 'black'});
+      await sleep(Math.max(1200, settle));                       // the camera catches up with "off"
+    } else {
+      progress(0, 1, 'Timing the camera ...');
+      lag = await cameraLag(session.session);
+      settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
+      progress(0, 1, 'Choosing the LED level ...');
+      level = await chooseLevel(session.session, settle);
+    }
+    calib = {lag, settle, level};
+    log.lag = lag; log.settle = settle; log.level = level; log.reused = !!reuse;
+    aim.blinkLevel = level.level;
     // all-on first at that level: let exposure settle on the LEDs, then lock it (where allowed)
-    await api('/api/mapping/step', {session: session.session, step: 'white', level: lv.level});
+    await api('/api/mapping/step', {session: session.session, step: 'white', level: level.level});
     await sleep(settle);
     const shots = {};
     shots.white = await grab(4, true);
@@ -388,9 +397,9 @@ $('#runBtn').onclick = async () => {
     const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
     let prev = shots.white;
     for (let i = 0; i < order.length; i++) {
-      if (cancelled) return;
+      if (cancelled) throw new Error('Stopped.');
       const step = order[i];
-      progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}   (camera lag ${lag.ms} ms)`);
+      progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}`);
       await api('/api/mapping/step', {session: session.session, step});
       await sleep(settle);
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
@@ -408,7 +417,6 @@ $('#runBtn').onclick = async () => {
       }
       shots[step] = prev = shot;
     }
-    await unlockCamera();
     progress(order.length + 1, order.length + 1, 'Working it out ...');
     await sleep(30);
     const W = shots.black.W, H = shots.black.H, bits = [];
@@ -419,16 +427,29 @@ $('#runBtn').onclick = async () => {
     decoded.photo = shots.white;
     decoded.shots = shots;
     decoded.log = log;
-    decoded.meta = {...atStart, moved: decoded.stats.cameraMoved || sensor.maxRot > 25};
+    decoded.meta = {...atStart, endHeading: sensor.heading, maxRot: Math.round(sensor.maxRot),
+                    moved: decoded.stats.cameraMoved || sensor.maxRot > 25};
     await api('/api/mapping/step', {session: session.session, step: 'white'}).catch(() => {});
     lastReport = await api('/api/mapping/save', {session: session.session, points: decoded.points,
                                                  colours: decoded.colours, save: false}).catch(e => ({error: e.message}));
-    showResult();
     if ($('#autoSend').checked) { sendPhotos.quiet = true; sendPhotos().finally(() => { sendPhotos.quiet = false; }); }
-  } catch (e) {
+    return decoded;
+  } finally {
     await unlockCamera();
+    $('#progressWrap').hidden = true;
+  }
+}
+
+$('#runBtn').onclick = async () => {
+  const ids = tickedIds();
+  if (!ids.length) { toast('Tick at least one controller'); return; }
+  $('#runBtn').disabled = true;
+  try {
+    await captureView(ids, +$('#angle').value || 0, null);
+    showResult();
+  } catch (e) {
     toast(e.message); $('#overlay').textContent = e.message;
-    $('#runBtn').disabled = false; $('#progressWrap').hidden = true;
+    $('#runBtn').disabled = false;
   }
 };
 $('#cancelBtn').onclick = async () => {
@@ -523,12 +544,16 @@ async function sendPhotos() {
 }
 $('#retryBtn').onclick = () => { show('cam'); $('#runBtn').disabled = false; $('#progressWrap').hidden = true; startAim();
                                  $('#overlay').textContent = 'Frame the whole installation, then hold still.'; };
+async function keepView() {
+  const r = await api('/api/mapping/view', {session: session.session, angle: decoded.meta.angle, points: decoded.points,
+    colours: decoded.colours, heading: decoded.meta.heading, pitch: decoded.meta.pitch, moved: decoded.meta.moved});
+  await loadViews();
+  return r;
+}
 $('#keepBtn').onclick = async () => {
   $('#keepBtn').disabled = true;
   try {
-    const r = await api('/api/mapping/view', {session: session.session, angle: decoded.meta.angle, points: decoded.points,
-      colours: decoded.colours, heading: decoded.meta.heading, pitch: decoded.meta.pitch, moved: decoded.meta.moved});
-    await loadViews();
+    const r = await keepView();
     show('kept');
     const n = r.views.views.length;
     $('#keptTitle').textContent = `View ${n} kept (${decoded.meta.angle}°)`;
@@ -540,6 +565,114 @@ $('#keepBtn').onclick = async () => {
     $('#keptReport').innerHTML = portTable(r.controllers, true);
   } catch (e) { toast(e.message); $('#keepBtn').disabled = false; }
 };
+// ---------------------------------------------------------------- guided walk-around
+// One continuous session: capture, keep, then direct the user round the object with the
+// compass ("walk right ... 28 of 45 degrees") and the tilt sensor ("hold it upright"), and
+// capture by itself as soon as the phone is at the next angle, upright and steady. Each
+// capture needs the phone still (an LED's number is read from the same pixels across ~25
+// photos), so it walks, stops, holds, walks. Without a compass it asks for a tap instead.
+const GUIDE = {step: 45, views: 8, tol: 9, upright: 12, steadyRot: 10, steadyMs: 1200};
+let guide = null;
+function gauge(done, target) {
+  const pct = Math.max(0, Math.min(100, 100 * done / target));
+  return `<div class="gauge"><div style="width:${pct}%"></div></div>`;
+}
+function tiltText() {
+  if (sensor.pitch === null) return '';
+  const t = Math.round(sensor.pitch);
+  return Math.abs(t) <= GUIDE.upright ? 'upright' : t > 0 ? 'tilt the top of the phone towards you' : 'tilt the top of the phone away from you';
+}
+function say(big, small) { $('#guideBig').innerHTML = big; $('#guideSmall').innerHTML = small || ''; }
+async function runGuided() {
+  const ids = tickedIds();
+  if (!ids.length) { toast('Tick at least one controller'); return; }
+  guide = {stop: false, finish: false, kept: 0, wait: null};
+  $('#guidePanel').hidden = false; $('#camButtons').hidden = true; $('#guideButtons').hidden = false;
+  await stopAim();
+  try {
+    if (views && views.views.length && !confirm('Add to the views already kept? (Cancel discards them and starts afresh.)')) {
+      await api('/api/mapping/views', undefined, 'DELETE'); await loadViews();
+    }
+    let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + GUIDE.step) % 360 : 0;
+    let first = !(views && views.views.length);
+    while (!guide.stop && !guide.finish) {
+      if (!first) {
+        const ok = await walkTo(target);
+        if (!ok) break;
+      }
+      say('Hold still', 'capturing this view: about 10-20 s');
+      let d;
+      // the view's angle is where the compass says the phone is, not the target it was walking to
+      const here = first ? 0 : (compassAngle() ?? target);
+      try { d = await captureView(ids, here, calib); }
+      catch (e) { if (guide.stop) break; say('That capture failed', esc(e.message) + '<br>Trying again in a moment.'); await sleep(2500); continue; }
+      if (d.meta.moved) { say('You moved', 'hold the phone still while it captures: trying again'); await sleep(2000); continue; }
+      if (d.stats.found < d.stats.total * 0.1) { say('Hardly any LEDs found', 'get the installation in frame, darker room: trying again'); await sleep(2500); continue; }
+      const r = await keepView();
+      guide.kept = r.views.views.length;
+      say(`View ${guide.kept} kept: ${r.new} new LEDs`, `${r.views.seen_any} of ${r.views.total} seen so far. On the LEDs: green = this view, blue = before, red = not yet.`);
+      await sleep(1800);
+      first = false;
+      if (guide.kept >= GUIDE.views || (target + GUIDE.step) % 360 === 0) break;
+      target = (target + GUIDE.step) % 360;
+    }
+    if (!guide.stop && views && views.views.length) { $('#guidePanel').hidden = true; await build(); }
+  } finally {
+    guide = null;
+    $('#guidePanel').hidden = true; $('#camButtons').hidden = false; $('#guideButtons').hidden = true;
+    $('#runBtn').disabled = false;
+  }
+}
+// Direct the user to `target` degrees round the object; resolve true when there, upright and
+// steady (or on a tap without a compass), false if stopped / finished.
+async function walkTo(target) {
+  let steadySince = null;
+  return new Promise(done => {
+    let over = false;
+    const resolve = v => { if (over) return; over = true; if (guide) guide.wait = null; $('#hereBtn').hidden = true; done(v); };
+    guide.wait = resolve;
+    const tick = () => {
+      if (over) return;
+      if (!guide || guide.stop || guide.finish) { resolve(false); return; }
+      const a = compassAngle();
+      if (a === null) {
+        say(`Walk about ${GUIDE.step}&deg; to your right`, 'keep pointing at the middle, same distance and height, then tap <em>I\'m there</em> (no compass on this phone)');
+        $('#hereBtn').hidden = false;
+        setTimeout(tick, 300);
+        return;
+      }
+      $('#hereBtn').hidden = true;
+      const prevTarget = (target - GUIDE.step + 360) % 360;
+      let moved = (a - prevTarget + 360) % 360;
+      if (moved > 300) moved -= 360;                               // a little the wrong way
+      const off = ((a - target + 540) % 360) - 180;               // + = past the target
+      const tilt = tiltText(), upright = tilt === 'upright' || tilt === '';
+      const steady = sensor.rot < GUIDE.steadyRot;
+      if (Math.abs(off) <= GUIDE.tol && upright && steady) {
+        steadySince = steadySince || performance.now();
+        const left = GUIDE.steadyMs - (performance.now() - steadySince);
+        say('Stop here and hold still', left > 0 ? `capturing in ${Math.ceil(left / 400)} ...` : 'capturing');
+        if (left <= 0) { resolve(true); return; }
+      } else {
+        steadySince = null;
+        if (Math.abs(off) <= GUIDE.tol) say(steady ? 'Hold the phone upright' : 'Hold still', tilt === 'upright' ? '' : tilt);
+        else if (off < 0) say(`Walk to your right: ${Math.max(0, Math.round(moved))}&deg; of ${GUIDE.step}&deg;`,
+                              gauge(moved, GUIDE.step) + `keep pointing at the middle; ${tilt || 'same height'}`);
+        else say(`Too far: step back to your left ${Math.round(off)}&deg;`, gauge(GUIDE.step + off, GUIDE.step) + tilt);
+      }
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
+}
+$('#guideBtn').onclick = () => runGuided();
+$('#hereBtn').onclick = () => { if (guide && guide.wait) guide.wait(true); };
+$('#finishBtn').onclick = () => { if (guide) { guide.finish = true; cancelled = true; if (guide.wait) guide.wait(false); } };
+$('#stopGuideBtn').onclick = async () => {
+  if (guide) { guide.stop = true; cancelled = true; if (guide.wait) guide.wait(false); }
+  await api('/api/mapping/stop', {}).catch(() => {});
+};
+
 $('#moreBtn').onclick = () => {
   const n = views.views.length;
   angleTouched = false;

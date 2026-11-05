@@ -4,6 +4,20 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.9.0] - 2026-11-05
+
+- **Guided walk-around**: one tap maps a 3D piece all the way round. The phone captures a
+  view, keeps it (coverage on the LEDs, photos to the bridge), then directs you with the
+  compass and tilt sensor: "Walk to your right: 28 of 45 degrees" with a gauge, "Too far:
+  step back", "Hold the phone upright / tilt the top towards you", and captures by itself
+  as soon as the phone is at the next angle, upright and steady for a moment. Eight views
+  (360 degrees) or *Finish & build* whenever you like, then the 3D map. Each view's angle is
+  the compass reading at the capture, not the target. Later views reuse the first one's
+  camera lag, wait and LED level (about 16 s each instead of 23). Without a compass it asks
+  for a tap (*I'm there*) at each stop. *Capture one view* is still there for flat pieces.
+- The phone still has to stand still during each capture: an LED's number is read from the
+  same pixels across about 25 photos, so it walks, stops, holds, walks.
+
 ## [0.8.0] - 2026-11-05
 
 - **Live aim view.** As soon as the camera opens, the bridge blinks the LEDs (all on / off,

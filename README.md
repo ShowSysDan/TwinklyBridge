@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.8.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.9.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.8.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.9.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -452,7 +452,14 @@ port's real string length and checks its colour order.
    is ticked, as it is by default.)
 6. **Keep this view.** The installation now shows what has been found: **green** in this
    view, **blue** in earlier views, **red** not found yet.
-7. For a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
+   **Walk around (guided)** does steps 4 to 8 by itself for a 3D piece: it captures and keeps
+   a view, then directs you round with the compass and tilt sensor ("Walk to your right: 28
+   of 45 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
+   once the phone is at the next angle, upright and still; after eight views (or *Finish &
+   build*) it builds the map. The phone must stand still while each view is captured (about
+   16 s after the first), because each LED's number is read from the same pixels across about
+   25 photos. Without a compass it asks you to tap *I'm there* at each stop.
+7. Or by hand: for a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
    distance and height, point the phone at the middle of the piece again and *Capture another
    view*; repeat until little red is left. The angle fills itself in from the phone's compass
    (heading change since the first view) and can be typed or picked instead. 8 views all
