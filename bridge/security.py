@@ -35,8 +35,10 @@ SECURITY_HEADERS = {
 
 # Monitoring may poll these without credentials; they reveal only "alive" and counts.
 UNAUTHENTICATED = ("/healthz",)
-# The one mutating endpoint that takes a file upload instead of JSON.
+# Mutating endpoints that take a file instead of JSON: the map CSV upload, and the phone's
+# capture photos (raw PNG bodies).
 MULTIPART_OK = ("/map/csv",)
+RAW_UPLOAD_PREFIXES = ("/api/mapping/captures/",)
 
 
 def parse_networks(spec):
@@ -100,7 +102,8 @@ def init_app(app, allowed_networks="", panel_user="twinkly", panel_password=None
                 return resp
         if (request.path.startswith("/api/") and request.method in ("POST", "PUT", "PATCH", "DELETE")
                 and request.content_length and not request.is_json
-                and not request.path.endswith(MULTIPART_OK)):
+                and not request.path.endswith(MULTIPART_OK)
+                and not request.path.startswith(RAW_UPLOAD_PREFIXES)):
             return _json_error(415, "send a JSON body")
         return None
 

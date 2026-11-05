@@ -7,6 +7,11 @@
  *   colour.black / .red / .green / .blue : {r, g, b} arrays (the frame in camera colour)
  *   bits[k] = [A, B] : LEDs whose Gray-code bit k is 1, then the inverse
  * LED global index g has code gray(g + 1); 0 means "no LED".
+ *
+ * Each camera pixel reads its own LED number (one bit per pattern pair: pattern minus inverse),
+ * keeping only pixels where every bit is clear. Each LED is then the centre of its pixels near
+ * its most confident one. Pixel by pixel copes with LEDs only 2-3 camera pixels apart, where
+ * finding spots first would merge neighbours (tested).
  */
 (function (root) {
   'use strict';
@@ -107,7 +112,20 @@
 
   function dist(a, b) { const dx = a[0] - b[0], dy = a[1] - b[1]; return Math.sqrt(dx * dx + dy * dy); }
 
-  const api = {decode, grayDecode};
+  // How different two captures are where LEDs can be: mean |a - b| over pixels lit in white,
+  // as a share of their on-brightness. The phone uses it to catch a photo taken before the
+  // LEDs had changed (camera lag), and takes it again.
+  function change(a, b, white, black) {
+    let d = 0, s = 0;
+    for (let p = 0; p < a.length; p += 3) {
+      const o = white[p] - black[p];
+      if (o < 20) continue;
+      d += Math.abs(a[p] - b[p]); s += o;
+    }
+    return s ? d / s : 1;
+  }
+
+  const api = {decode, grayDecode, change};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.MapDecode = api;
 })(typeof window !== 'undefined' ? window : this);

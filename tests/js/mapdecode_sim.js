@@ -1,6 +1,7 @@
 // Synthetic camera for the mapping decoder: renders what a phone would photograph for each
 // step the bridge lights, then decodes and prints a JSON summary for tests/test_mapping.py.
 const MD = require(process.argv[2]);
+const HARD = process.argv[3] === 'hard';      // bloom, clipping, banding, a floor reflection, more noise
 const W = 640, H = 360, N = 1250, PORT = 250;
 let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 // five strings, each a gentle wave across the frame, 4 px apart along the string
@@ -18,7 +19,7 @@ function lit(g, step) {
   return step[0] === 'b' ? !!b : !b;
 }
 function render(step) {      // -> {r, g, b, lum} as the camera sees it
-  const gain = 0.85 + 0.3 * rnd(), r = new Float32Array(W * H), gg = new Float32Array(W * H), b = new Float32Array(W * H);
+  const gain = HARD ? 0.8 + 0.4 * rnd() : 0.85 + 0.3 * rnd(), r = new Float32Array(W * H), gg = new Float32Array(W * H), b = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) { r[i] = gg[i] = b[i] = 10; }
   for (let g = 0; g < N; g++) {
     if (!present(g)) continue;
@@ -27,20 +28,29 @@ function render(step) {      // -> {r, g, b, lum} as the camera sees it
       const sentCh = ['red', 'green', 'blue'].indexOf(step);
       const seenLetter = order(g)[sentCh];                  // wire channel k drives this colour
       rgb = [seenLetter === 'R' ? 1 : 0, seenLetter === 'G' ? 1 : 0, seenLetter === 'B' ? 1 : 0];
-    } else rgb = lit(g, step) ? [1, 1, 1] : null;
+    } else rgb = lit(g, step) ? [0, 1, 0] : null;          // coding frames: green full on
     if (!rgb) continue;
-    const [x0, y0] = pos[g];
-    for (let y = Math.floor(y0 - 4); y <= y0 + 4; y++) for (let x = Math.floor(x0 - 4); x <= x0 + 4; x++) {
-      if (x < 0 || y < 0 || x >= W || y >= H) continue;
-      const a = 140 * Math.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * 1.1 ** 2)), p = y * W + x;
-      r[p] += a * rgb[0]; gg[p] += a * rgb[1]; b[p] += a * rgb[2];
+    const blobs = [[pos[g][0], pos[g][1], HARD ? 230 : 140, HARD ? 1.5 : 1.1]];
+    if (HARD) { blobs.push([pos[g][0], pos[g][1], 25, 4]);                     // bloom halo
+                blobs.push([pos[g][0] + 6, 2 * 340 - pos[g][1], 45, 2.5]); }   // reflection off a shiny floor
+    for (const [x0, y0, amp, sig] of blobs) {
+      const rr = Math.ceil(3 * sig);
+      for (let y = Math.floor(y0 - rr); y <= y0 + rr; y++) for (let x = Math.floor(x0 - rr); x <= x0 + rr; x++) {
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const a = amp * Math.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * sig ** 2)), p = y * W + x;
+        r[p] += a * rgb[0]; gg[p] += a * rgb[1]; b[p] += a * rgb[2];
+      }
     }
   }
   const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
   const R = new Uint8ClampedArray(W * H), G = new Uint8ClampedArray(W * H), B = new Uint8ClampedArray(W * H), L = new Uint8ClampedArray(W * H);
+  const band = new Float32Array(H).fill(1);               // stripes across the picture
+  if (HARD) { const ph = rnd() * 6.28; for (let y = 0; y < H; y++) band[y] = 1 + 0.15 * Math.sin(y / 9 + ph); }
+  const nz = HARD ? 16 : 8;
   for (let i = 0; i < W * H; i++) {
-    R[i] = clamp(r[i] * gain + (rnd() - 0.5) * 8); G[i] = clamp(gg[i] * gain + (rnd() - 0.5) * 8);
-    B[i] = clamp(b[i] * gain + (rnd() - 0.5) * 8); L[i] = clamp(0.299 * R[i] + 0.587 * G[i] + 0.114 * B[i]);
+    const gn = gain * band[(i / W) | 0];
+    R[i] = clamp(r[i] * gn + (rnd() - 0.5) * nz); G[i] = clamp(gg[i] * gn + (rnd() - 0.5) * nz);
+    B[i] = clamp(b[i] * gn + (rnd() - 0.5) * nz); L[i] = clamp(0.299 * R[i] + 0.587 * G[i] + 0.114 * B[i]);
   }
   return {r: R, g: G, b: B, lum: L};
 }

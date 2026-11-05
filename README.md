@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.6.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.9.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.6.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.9.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -426,8 +426,15 @@ port's real string length and checks its colour order.
 3. **Open the camera** and allow camera and motion access (motion gives the compass and tilt
    readouts). Frame the whole installation and hold the phone still: a tripod, or leaned
    against something. Darken the room if you can.
-4. **Capture.** The LEDs flash 28 patterns (about 15 s for 1,250 LEDs); keep still until it
-   says *Working it out*.
+   While you aim, the LEDs blink and the preview shows green where the camera sees them,
+   red where they are too bright (clipped), and warns if LEDs reach the edge of the picture.
+4. **Capture.** The phone picks the LED level (it tries 255 down to 32 and takes the brightest
+   that neither flickers on this camera nor clips: dimming LEDs is PWM, which a phone's
+   rolling shutter can catch as stripes), first times the camera (LEDs off, then on: how long until the
+   camera shows it) and sets its wait from that, then the LEDs flash 28 full-green patterns
+   (about 15-25 s for 1,250 LEDs, depending on the camera); keep still until it says
+   *Working it out*. Every photo is checked against the one before; one taken before the
+   LEDs changed is taken again.
 5. **Check the capture**: the photo with a dot on every LED found, coloured by port, and a
    table per port:
 
@@ -437,9 +444,22 @@ port's real string length and checks its colour order.
    | Ends at | the last LED seen: the string's real length. *string ends at LED 200 of 250 configured* means 50 configured LEDs don't exist (or are out of frame) |
    | Colours | what the camera saw when the bridge sent red, green, blue: `RGB` is right; `GRB` (*red sent, green seen*) means those strings take a different colour order |
 
+   Dots run red to violet along each string from its first LED: a right string is one
+   smooth rainbow; a dot in the wrong colour is a misread LED. If a capture looks wrong,
+   **Send photos to the bridge**: every photo goes to `instance/captures/`, and the desk
+   page's *Camera mapping* panel offers them as a zip, to see what the camera saw. (They are
+   sent after every capture anyway while *Send the photos to the bridge after each capture*
+   is ticked, as it is by default.)
 6. **Keep this view.** The installation now shows what has been found: **green** in this
    view, **blue** in earlier views, **red** not found yet.
-7. For a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
+   **Walk around (guided)** does steps 4 to 8 by itself for a 3D piece: it captures and keeps
+   a view, then directs you round with the compass and tilt sensor ("Walk to your right: 28
+   of 45 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
+   once the phone is at the next angle, upright and still; after eight views (or *Finish &
+   build*) it builds the map. The phone must stand still while each view is captured (about
+   16 s after the first), because each LED's number is read from the same pixels across about
+   25 photos. Without a compass it asks you to tap *I'm there* at each stop.
+7. Or by hand: for a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
    distance and height, point the phone at the middle of the piece again and *Capture another
    view*; repeat until little red is left. The angle fills itself in from the phone's compass
    (heading change since the first view) and can be typed or picked instead. 8 views all
@@ -489,11 +509,11 @@ shows the addresses, where HTTPS is listening, and why it is off if it is:
   --force`) and restart; the panel warns when the machine's IP is missing from it.
 - Use the address the panel shows, with the `https://` (typing it without now redirects).
 
-Tips: brightness around 128 is usually right (raise it in a bright room, lower it if LEDs
-bloom into each other); raise *Wait after each pattern* if the phone's camera is slow to
-settle and many LEDs are missed. If it says the camera moved, run it again. LEDs hidden from
-the camera in one run can be filled by mapping again from another angle later, or by
-uploading a CSV.
+Tips: darken the room and keep the phone still; that matters more than anything else. The
+wait after each pattern is measured per capture (camera lag x 1.3); if the result shows many
+*photos retaken* or stops with *the camera isn't keeping up*, raise *Shortest wait after
+each pattern*. If dots are scattered or strings aren't smooth rainbows, *Send photos to the
+bridge* and look at (or share) the zip: the photos show what the camera actually saw.
 
 How it works: every LED gets a number, written in Gray code, one bit per pattern and each
 pattern followed by its inverse. The phone reads each camera pixel's bits back as an LED
@@ -692,12 +712,14 @@ GET  /api/patterns                       pattern names and what each checks
 GET  /map                                phone page for camera mapping (open over https://)
 GET  /api/mapping/info                   {"https_port", "host", "session"}
 POST /api/mapping/start                  {"ids": [...], "level": 128} -> session, steps, controllers and offsets
-POST /api/mapping/step                   {"session", "step"}: returns once that frame is out on every controller
+POST /api/mapping/step                   {"session", "step", "level"}: returns once that frame is out on every controller
 POST /api/mapping/save                   {"session", "points": [[x,y]|null...], "colours": ["RGB"|...], "save": true}
                                           -> per controller found / filled and a per-port report
 POST /api/mapping/view                   {"session", "angle", "points", "colours", "heading", "pitch", "moved"}: keep as a view
 GET  /api/mapping/views                  the kept views; DELETE discards them
 POST /api/mapping/combine                {"mode": "auto"|"flat"|"around", "mirror": false, "save": false}
+POST /api/mapping/captures/<name>/<file> one photo (image/png) or the notes (capture.json) of a capture
+GET  /api/mapping/captures               the captures sent from the phone; <name>.zip downloads one; DELETE removes it
 POST /api/mapping/stop
 GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB

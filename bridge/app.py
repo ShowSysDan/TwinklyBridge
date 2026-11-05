@@ -6,12 +6,15 @@ config, installs the access controls and starts the receiver / output threads on
 """
 import argparse
 import base64
-from collections import Counter
 import csv
 import io
 import os
+import re
+import shutil
 import threading
 import time
+import zipfile
+from collections import Counter
 
 from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request
 
@@ -159,12 +162,15 @@ def _session(body):
 
 @app.post("/api/mapping/step")
 def api_mapping_step():
-    """body: {"session": id, "step": "white"} -> returns once the frame is out on every controller."""
+    """body: {"session": id, "step": "white", "level": 255 (optional: the coding frames' LED
+    level from now on)} -> returns once the frame is out on every controller."""
     body = request.get_json(force=True) or {}
     s = _session(body)
     step = body.get("step")
     if step not in s.steps:
         return jsonify(error=f"unknown step {step!r}"), 400
+    if body.get("level") is not None:
+        s.code_level = max(8, min(255, int(body["level"])))
     t = time.time()
     late = _deliver(s.ctrls, {c.id: s.frame(c, step) for c in s.ctrls})
     if late:
@@ -330,6 +336,75 @@ def api_mapping_combine():
                       f"camera {'3D' if mode == 'around' else '2D'}, {len(data['views'])} views")
     return jsonify(ok=True, mode=mode, views=info, stats=stats, points=pts, controllers=out,
                    saved=bool(body.get("save")), totals=parameter_summary())
+
+
+# ---------------------------------------------------------------- capture photos (diagnosis)
+CAPTURE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+CAPTURE_FILE = re.compile(r"^[A-Za-z0-9_]{1,32}\.(png|json)$")
+KEEP_CAPTURES = 20
+
+
+def captures_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(state.CONFIG_PATH)), "captures")
+
+
+def _capture_path(name, fname=None):
+    if not CAPTURE_NAME.match(name or "") or (fname is not None and not CAPTURE_FILE.match(fname)):
+        abort(make_response(jsonify(ok=False, error="bad capture or file name"), 400))
+    d = os.path.join(captures_dir(), name)
+    return d if fname is None else os.path.join(d, fname)
+
+
+@app.post("/api/mapping/captures/<name>/<fname>")
+def api_capture_upload(name, fname):
+    """The phone sends a capture's photos (PNG) and its notes (capture.json), one file per call."""
+    path = _capture_path(name, fname)
+    want = "image/png" if fname.endswith(".png") else "application/json"
+    if (request.mimetype or "") != want:
+        return jsonify(error=f"send {fname} as {want}"), 415
+    d = os.path.dirname(path)
+    if os.path.isdir(d) and len(os.listdir(d)) >= 60:
+        return jsonify(error="too many files in this capture"), 413
+    os.makedirs(d, exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(request.get_data())
+    caps = sorted((e for e in os.scandir(captures_dir()) if e.is_dir()), key=lambda e: e.stat().st_mtime)
+    for old in caps[:-KEEP_CAPTURES]:                 # keep the latest captures only
+        shutil.rmtree(old.path, ignore_errors=True)
+    if fname == "capture.json":
+        log.info("capture photos %s received from %s", name, client_ip())
+    return jsonify(ok=True)
+
+
+@app.get("/api/mapping/captures")
+def api_captures():
+    out = []
+    if os.path.isdir(captures_dir()):
+        for e in sorted(os.scandir(captures_dir()), key=lambda e: e.name, reverse=True):
+            if e.is_dir():
+                files = os.listdir(e.path)
+                out.append({"name": e.name, "files": len(files), "complete": "capture.json" in files,
+                            "bytes": sum(os.path.getsize(os.path.join(e.path, f)) for f in files)})
+    return jsonify(out)
+
+
+@app.get("/api/mapping/captures/<name>.zip")
+def api_capture_zip(name):
+    d = _capture_path(name)
+    if not os.path.isdir(d):
+        abort(404)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(os.listdir(d)):
+            z.write(os.path.join(d, f), f"{name}/{f}")
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=twinkly-capture-{name}.zip"})
+
+
+@app.delete("/api/mapping/captures/<name>")
+def api_capture_delete(name):
+    shutil.rmtree(_capture_path(name), ignore_errors=True)
+    return jsonify(ok=True)
 
 
 @app.get("/healthz")

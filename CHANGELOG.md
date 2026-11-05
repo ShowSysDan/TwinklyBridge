@@ -4,6 +4,74 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.9.0] - 2026-11-05
+
+- **Guided walk-around**: one tap maps a 3D piece all the way round. The phone captures a
+  view, keeps it (coverage on the LEDs, photos to the bridge), then directs you with the
+  compass and tilt sensor: "Walk to your right: 28 of 45 degrees" with a gauge, "Too far:
+  step back", "Hold the phone upright / tilt the top towards you", and captures by itself
+  as soon as the phone is at the next angle, upright and steady for a moment. Eight views
+  (360 degrees) or *Finish & build* whenever you like, then the 3D map. Each view's angle is
+  the compass reading at the capture, not the target. Later views reuse the first one's
+  camera lag, wait and LED level (about 16 s each instead of 23). Without a compass it asks
+  for a tap (*I'm there*) at each stop. *Capture one view* is still there for flat pieces.
+- The phone still has to stand still during each capture: an LED's number is read from the
+  same pixels across about 25 photos, so it walks, stops, holds, walks.
+
+## [0.8.0] - 2026-11-05
+
+- **Live aim view.** As soon as the camera opens, the bridge blinks the LEDs (all on / off,
+  about once a second) and the phone keeps each pixel's brightest and darkest value of the
+  last two seconds: the difference is LED light, whatever the camera's lag. The preview is
+  overlaid green where the camera sees LEDs and red where they clip, with the share clipped
+  and a warning when LEDs reach the edge of the picture (some probably out of frame).
+- **Automatic LED level.** Each capture first lights the all-on frame at 255, 160, 96, 56
+  and 32 and, at each, compares two photos of the steady frame (if they differ where the
+  LEDs are, the PWM dimming flickers on this camera) and counts clipped LED pixels. The
+  coding patterns use the brightest level that doesn't flicker and hardly clips; full 255 if
+  every dimmed level flickers. The result shows the level and what each level did; the aim
+  view then blinks at that level. The bridge takes `"level"` on `POST /api/mapping/step`.
+- **Photos stream to the bridge after every capture** (on by default, a checkbox on the
+  camera screen), so a capture is always there to download from the desk page.
+- Tested with a fake camera lagging 250 ms with 3x gain: without flicker it chose 56 (255,
+  160 and 96 clipped 44%), with flicker below 255 it kept 255; all 1,250 LEDs found both times.
+- Decoding stays on the phone (fast there; the bridge would need numpy / OpenCV to match);
+  the streamed photos are there for processing on the bridge later if it is ever needed.
+
+## [0.7.0] - 2026-11-05
+
+Camera mapping: identifying LEDs on a real camera.
+
+- **Camera lag measured, every photo checked.** Each capture starts by switching the LEDs from
+  off to on and timing how long the camera takes to show it (phones add 100-400 ms); the wait
+  after each pattern is set from that (x1.3), instead of a fixed 300 ms. Each photo must
+  differ clearly from the previous one, or it was taken before the LEDs changed: the phone
+  waits and takes it again (up to 4 times) and stops with a clear message rather than
+  decoding a stale photo. A stale photo flips a bit for every LED in it and sends them to
+  wrong places, which is the "all over the place" result.
+  The lag test counts per-pixel brightening (LEDs are small dots: the picture's average
+  hardly moves) and starts from a dark picture taken after the camera has had longer than any
+  phone's lag to show the LEDs going dark (a still picture can just be a lagging one).
+  Tested with a camera lagging 450 ms: measured 440 ms, all 1,250 LEDs found.
+- **Coding patterns full-on green (255).** A channel at 255 isn't dimmed by PWM, so the
+  phone's rolling shutter can't catch it half off (dark bands across the photo); green is
+  what phone sensors see best. The brightness slider now only sets the coverage colours.
+- **All-on first, then the camera is locked**: exposure, focus and white balance are set to
+  manual where the browser allows (Android Chrome; iOS Safari ignores it).
+- **Result dots coloured along each string** (red -> violet from its first LED): a right
+  string is one smooth rainbow, a misread LED is the wrong colour. The result also shows the
+  measured lag, the wait used, photos retaken and what was locked.
+- **Send photos to the bridge** from the result screen: every photo of the capture plus its
+  notes go to `instance/captures/` (latest 20 kept); the desk page's *Camera mapping* panel
+  lists them for download as a zip. API: `POST /api/mapping/captures/<name>/<file>`,
+  `GET /api/mapping/captures`, `GET /api/mapping/captures/<name>.zip`, `DELETE`.
+- Tried and dropped: a parity check pattern (in Gray code chain neighbours always differ in
+  parity, so it rejected every pixel between neighbouring LEDs: 40% fewer LEDs found on
+  dense strings) and finding spots before reading their bits (merges LEDs under ~3 px apart).
+  The per-pixel decoder stays; tests now also run it on a harsh synthetic camera (bloom,
+  clipping, banding, a floor reflection, more noise, exposure drift): 1,153 of 1,200 found,
+  none misplaced.
+
 ## [0.6.0] - 2026-11-05
 
 - **3D camera mapping from several views.** Each capture can be kept as a view with the

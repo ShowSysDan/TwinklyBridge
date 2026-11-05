@@ -25,8 +25,10 @@
   <h2>1. What to map</h2>
   <div id="ctrlList" class="checks"></div>
   <div id="viewsBox"></div>
-  <label class="row">LED brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
-  <label class="row">Wait after each pattern (ms) <input type="number" id="settle" value="300" min="50" max="3000" step="50"></label>
+  <label class="row">Coverage colours brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
+  <label class="row">Shortest wait after each pattern (ms) <input type="number" id="settle" value="150" min="50" max="3000" step="50"></label>
+  <p class="hint">The patterns themselves are full green (no dimming, so no flicker in the photos). The wait is
+    measured at the start of every capture from how long the camera takes to show a change; this is only the minimum.</p>
   <p class="hint">Darken the room if you can. Hold the phone still for each capture (about 20 s): a tripod, or lean it
     on something. For a flat piece one capture from the front is enough. For a 3D piece (tree, sphere) capture it
     from several sides, walking around it to your right, about 45&deg; apart (8 views all round is best; 4 is the
@@ -37,7 +39,9 @@
 <section id="cam" hidden>
   <div class="viewport">
     <video id="video" playsinline muted autoplay></video>
+    <canvas id="aim" class="aimlayer"></canvas>
     <div class="overlay" id="overlay"></div>
+    <div class="guide" id="guidePanel" hidden><div class="big" id="guideBig"></div><div class="small" id="guideSmall"></div></div>
     <div class="progress" id="progressWrap" hidden><div id="progress"></div></div>
   </div>
   <div class="mobcard tight">
@@ -45,11 +49,22 @@
       <input type="number" id="angle" value="0" min="0" max="359" step="1"></label>
     <div class="anglebtns" id="angleBtns"></div>
     <p class="hint" id="sensors">Compass and tilt: allow motion access when asked.</p>
+    <p class="hint" id="aimInfo">The LEDs blink while you aim: green on the picture = LEDs the camera sees, red = too bright (clipped).</p>
+    <label class="checkrow"><input type="checkbox" id="autoSend" checked><span>Send the photos to the bridge after each capture</span></label>
   </div>
-  <div class="mobbar">
-    <button id="runBtn" class="big primary">3. Capture</button>
+  <div class="mobbar" id="camButtons">
+    <button id="guideBtn" class="big primary">Walk around (guided)</button>
     <button id="cancelBtn" class="big">Back</button>
+    <button id="runBtn" class="big">Capture one view</button>
   </div>
+  <div class="mobbar" id="guideButtons" hidden>
+    <button id="finishBtn" class="big primary">Finish &amp; build</button>
+    <button id="stopGuideBtn" class="big">Stop</button>
+    <button id="hereBtn" class="big" hidden>I'm there</button>
+  </div>
+  <p class="hint center">Walk around: the phone captures a view, tells you to walk about 45&deg; to your right,
+    and captures again by itself when you're there, upright and still, all the way round; then builds the 3D map.
+    For a flat piece, <em>Capture one view</em> is enough.</p>
 </section>
 
 <section id="result" hidden>
@@ -63,6 +78,8 @@
     <button id="keepBtn" class="big primary">Keep this view</button>
     <button id="retryBtn" class="big">Try again</button>
   </div>
+  <div class="mobbar one"><button id="sendBtn" class="big">Send photos to the bridge</button></div>
+  <p class="hint center">Sends every photo of this capture to the bridge, to look at what the camera saw when a map comes out wrong.</p>
 </section>
 
 <section id="kept" hidden>

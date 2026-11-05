@@ -69,7 +69,8 @@ def test_pattern_reaches_controller(bridge, mock):
     r = client.post("/api/test", json={"ids": [cid], "mode": "pattern", "pattern": "markers", "seconds": 2})
     assert r.get_json()["ok"]
     end = time.time() + 3
-    while time.time() < end and mock.state.last_frame[300:303] != b"\xff\x00\x00":
+    while time.time() < end and not (mock.state.last_frame[300:303] == b"\xff\x00\x00"
+                                      and mock.state.last_frame[0:3] == b"\x00\xff\x00"):
         time.sleep(0.05)
     f = mock.state.last_frame
     assert f[0:3] == b"\x00\xff\x00" and f[300:303] == b"\xff\x00\x00" and f[33:36] == b"\x00\x00\x00"
