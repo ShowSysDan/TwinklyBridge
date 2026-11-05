@@ -4,6 +4,24 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.9.2] - 2026-11-05
+
+Guided walk-around fixes ("hardly any LEDs found", camera view disappearing):
+
+- The guidance panel no longer sits on top of the camera picture (on a phone held upright the
+  picture is short, and the panel covered most of it); it is below it now.
+- The live detection overlay (green = LEDs seen, red = clipped, edge warning) runs while
+  you walk between captures, and after a failed capture for a few seconds to re-frame; its
+  readout is in the guidance panel too.
+- **Camera lock checked and undone if it hurts.** Locking exposure / focus / white balance
+  now keeps the camera's current values where the browser reports them, and compares the
+  LEDs before and after: if locking changed the picture (a phone jumping to a default
+  exposure or focus makes it dark or blurred: few or no LEDs found), it unlocks and carries
+  on. The capture notes say what happened (`locked` in capture.json, and on the result).
+- The walk's first capture measures the camera lag and LED level afresh instead of reusing
+  values from an earlier single capture; after a failed capture it measures again.
+- "Hardly any LEDs found" now says how many, and the LED level, lag and lock used.
+
 ## [0.9.1] - 2026-11-05
 
 - **Clear map** button on each controller card (when it has a map), with a confirmation;

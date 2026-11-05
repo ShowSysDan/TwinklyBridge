@@ -149,6 +149,7 @@ async function stopAim() {
   aim.on = false;
   while (aim.busy) await sleep(30);
   const cv = $('#aim'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  $('#guideAim').innerHTML = '';
 }
 async function aimBlink() {
   let lit = false;
@@ -200,10 +201,12 @@ async function aimLook() {
     }
     ctx.putImageData(img, 0, 0);
     const share = lit ? Math.round(100 * clipped / lit) : 0;
-    $('#aimInfo').innerHTML = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
+    const aimMsg = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
       : `LEDs seen (green), ${share}% of them clipped (red).` +
         (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
         (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
+    $('#aimInfo').innerHTML = aimMsg;
+    $('#guideAim').innerHTML = aimMsg;
   }
 }
 $('#camBtn').onclick = async () => {
@@ -340,14 +343,35 @@ async function chooseLevel(sessionId, settle) {
 }
 
 // Ask the camera to stop adjusting itself (Android Chrome supports this; iOS Safari ignores it).
-async function lockCamera() {
+// Keeps the camera's current exposure / focus / colour temperature where the browser reports
+// them, then checks the LEDs look the same as just before (`before`, an all-on photo): if
+// locking changed the picture (some phones jump to a default exposure or focus), it unlocks
+// again and says so. Returns what was locked, or ['undone: ...'].
+async function lockCamera(before) {
   const track = stream && stream.getVideoTracks()[0];
   if (!track || !track.getCapabilities) return [];
-  const caps = track.getCapabilities(), want = {}, locked = [];
-  for (const [k, label] of [['exposureMode', 'exposure'], ['whiteBalanceMode', 'white balance'], ['focusMode', 'focus']])
-    if (caps[k] && caps[k].includes('manual')) { want[k] = 'manual'; locked.push(label); }
+  const caps = track.getCapabilities(), cur = track.getSettings ? track.getSettings() : {}, want = {}, locked = [];
+  for (const [k, label, keep] of [['exposureMode', 'exposure', ['exposureTime', 'iso']],
+                                  ['whiteBalanceMode', 'white balance', ['colorTemperature']],
+                                  ['focusMode', 'focus', ['focusDistance']]]) {
+    if (!(caps[k] && caps[k].includes('manual'))) continue;
+    want[k] = 'manual'; locked.push(label);
+    for (const s of keep) if (cur[s] !== undefined && caps[s]) want[s] = cur[s];
+  }
   if (!locked.length) return [];
-  try { await track.applyConstraints({advanced: [want]}); return locked; } catch { return []; }
+  try { await track.applyConstraints({advanced: [want]}); } catch { return []; }
+  if (!before) return locked;
+  await sleep(400);
+  const after = await grab(2, false);
+  let a = 0, b = 0;
+  for (let p = 0; p < before.lum.length; p += 2) if (before.lum[p] > 60) { b += before.lum[p]; a += after.lum[p]; }
+  const ratio = b ? a / b : 1;
+  if (ratio < 0.7 || ratio > 1.4) {
+    await unlockCamera();
+    await sleep(400);
+    return [`undone: the picture changed (x${ratio.toFixed(2)}) when locked`];
+  }
+  return locked;
 }
 async function unlockCamera() {
   const track = stream && stream.getVideoTracks()[0];
@@ -392,7 +416,7 @@ async function captureView(ids, angle, reuse) {
     await sleep(settle);
     const shots = {};
     shots.white = await grab(4, true);
-    log.locked = await lockCamera();
+    log.locked = await lockCamera(shots.white);
     await sleep(150);
     const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
     let prev = shots.white;
@@ -595,6 +619,7 @@ async function runGuided() {
     }
     let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + GUIDE.step) % 360 : 0;
     let first = !(views && views.views.length);
+    let walkCalib = null;                               // measured on this walk's first capture
     while (!guide.stop && !guide.finish) {
       if (!first) {
         const ok = await walkTo(target);
@@ -604,10 +629,18 @@ async function runGuided() {
       let d;
       // the view's angle is where the compass says the phone is, not the target it was walking to
       const here = first ? 0 : (compassAngle() ?? target);
-      try { d = await captureView(ids, here, calib); }
+      try { d = await captureView(ids, here, walkCalib); walkCalib = calib; }
       catch (e) { if (guide.stop) break; say('That capture failed', esc(e.message) + '<br>Trying again in a moment.'); await sleep(2500); continue; }
       if (d.meta.moved) { say('You moved', 'hold the phone still while it captures: trying again'); await sleep(2000); continue; }
-      if (d.stats.found < d.stats.total * 0.1) { say('Hardly any LEDs found', 'get the installation in frame, darker room: trying again'); await sleep(2500); continue; }
+      if (d.stats.found < d.stats.total * 0.1) {
+        say(`Hardly any LEDs found (${d.stats.found} of ${d.stats.total})`,
+            'Check the green on the picture shows the LEDs, the whole piece is in frame and the room is dark; ' +
+            `then hold still. (LED level ${d.log.level.level}, camera lag ${d.log.lag.ms} ms` +
+            (d.log.locked.length ? `, camera lock: ${esc(d.log.locked.join(', '))}` : '') + '.) Trying again in a moment.');
+        walkCalib = null;                               // measure afresh next time
+        await aimFor(5000);
+        continue;
+      }
       const r = await keepView();
       guide.kept = r.views.views.length;
       say(`View ${guide.kept} kept: ${r.new} new LEDs`, `${r.views.seen_any} of ${r.views.total} seen so far. On the LEDs: green = this view, blue = before, red = not yet.`);
@@ -625,8 +658,15 @@ async function runGuided() {
 }
 // Direct the user to `target` degrees round the object; resolve true when there, upright and
 // steady (or on a tap without a compass), false if stopped / finished.
+// Show the live detection overlay for a while (LEDs blinking), e.g. to re-frame after a failure.
+async function aimFor(ms) {
+  await startAim();
+  await sleep(ms);
+}
 async function walkTo(target) {
   let steadySince = null;
+  startAim();                                           // live detection overlay while walking
+  $('#overlay').textContent = '';
   return new Promise(done => {
     let over = false;
     const resolve = v => { if (over) return; over = true; if (guide) guide.wait = null; $('#hereBtn').hidden = true; done(v); };
