@@ -203,10 +203,19 @@ $('#tStart').onclick = () => runTest({mode: 'pattern', pattern: $('#tPattern').v
                                       speed: +$('#tSpeed').value, seconds: +$('#tSecs').value});
 $('#tStop').onclick = () => runTest({mode: 'stop', ids: status.controllers.map(c => c.id)});
 api('/api/mapping/info').then(m => {
-  const host = location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? '<this PC\'s IP>' : location.hostname;
-  $('#mapInfo').innerHTML = m.https_port
-    ? `On the phone, open <strong>https://${esc(host)}:${m.https_port}/map</strong> and accept the certificate warning once.`
-    : 'HTTPS is off (no certificate), and phones only allow the camera over HTTPS. Re-run install.sh / install.bat, then restart.';
+  const h = m.https || {};
+  if (!m.https_port) {
+    $('#mapInfo').innerHTML = `<span class="bad">HTTPS is off: ${esc(h.error || 'not started')}.</span> Phones only allow the camera over HTTPS.`;
+    return;
+  }
+  const local = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+  const urls = !local ? [`https://${location.hostname}:${m.https_port}/map`] : (m.urls.length ? m.urls : [`https://<this PC's IP>:${m.https_port}/map`]);
+  $('#mapInfo').innerHTML =
+    `On the phone, open ${urls.map(u => `<strong>${esc(u)}</strong>`).join(' or ')} (type the <strong>https://</strong>) and accept the certificate warning once.` +
+    `<br><span class="hint">HTTPS listening on ${esc(h.host)}:${m.https_port}. If the phone can't load it but can load this page's address, ` +
+    `the firewall is blocking TCP ${m.https_port}.</span>` +
+    (m.cert_missing_ips.length ? `<br><span class="bad">The certificate doesn't list ${esc(m.cert_missing_ips.join(', '))} ` +
+      `(this machine's IP changed?): make a new one with NEW_CERT=1 sudo bash install.sh, or python tools/make_cert.py --force, then restart.</span>` : '');
 }).catch(() => { $('#mapInfo').textContent = 'unavailable'; });
 api('/api/patterns').then(p => {
   patterns = p;

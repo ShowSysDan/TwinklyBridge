@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.5.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.5.1** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.5.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.5.1", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -434,6 +434,23 @@ real string length and checks its colour order.
 6. **Save map** stores it as the controller's map (`camera, 1200 seen, 50 filled`); LEDs not
    seen are filled in along their string. *Try again* repeats without saving.
 
+If the phone page doesn't load, work down this list. The desk UI's *Camera mapping* panel
+shows the addresses, where HTTPS is listening, and why it is off if it is:
+
+- **Panel says "HTTPS is off: no certificate"**: run `install.bat` (Windows) or
+  `sudo bash install.sh` (Linux) again after updating, or `python tools/make_cert.py`, then
+  restart the bridge. On Windows the certificate needs Git for Windows' `openssl`.
+- **The phone can open `http://<bridge-ip>:5120` but not `:5121`**: the firewall blocks TCP
+  5121. Add the rule from the install steps above (Windows: `New-NetFirewallRule ...
+  -LocalPort 5121`; Linux: `sudo ufw allow 5121/tcp`).
+- **The phone can't open `http://<bridge-ip>:5120` either**: it isn't on a network that
+  reaches the bridge (guest Wi-Fi, another VLAN), or the bridge was started with
+  `HOST=127.0.0.1`; the HTTPS port listens on every interface regardless.
+- **Safari says it can't establish a secure connection, with no way to continue**: make a
+  fresh certificate (`NEW_CERT=1 sudo bash install.sh`, or `python tools/make_cert.py
+  --force`) and restart; the panel warns when the machine's IP is missing from it.
+- Use the address the panel shows, with the `https://` (typing it without now redirects).
+
 Tips: brightness around 128 is usually right (raise it in a bright room, lower it if LEDs
 bloom into each other); raise *Wait after each pattern* if the phone's camera is slow to
 settle and many LEDs are missed. If it says the camera moved, run it again. LEDs hidden from
@@ -589,7 +606,7 @@ are set in the web UI and stored in `instance/bridge_config.json`.
 | `SYSLOG_HOST` | *(unset)* | Remote syslog server for every log line |
 | `SYSLOG_PORT` / `SYSLOG_PROTO` / `SYSLOG_FACILITY` | `514` / `udp` / `local0` | Remote syslog details (facility also applies to local syslog) |
 | `HTTPS_PORT` | `5121` | HTTPS port for the phone (camera mapping); `0` = off. The Linux service takes it from `install.sh` |
-| `HTTPS_HOST` | same as `HOST` | Bind address for HTTPS under `run.py` |
+| `HTTPS_HOST` | `0.0.0.0` | Bind address for HTTPS. Every interface by default, even when `HOST` keeps the web UI on `127.0.0.1`, because the phone has to reach it |
 | `TLS_CERT` / `TLS_KEY` | `instance/cert.pem` / `instance/key.pem` | Certificate for HTTPS (made by the installers; replace with one from `mkcert` or your own CA to avoid the warning) |
 | `TWINKLY_BRIDGE_CONFIG` | `instance/bridge_config.json` | Where the bridge saves its config (`--config` on `run.py` overrides it) |
 

@@ -92,7 +92,13 @@ def map_page():
 @app.get("/api/mapping/info")
 def api_mapping_info():
     """Where the phone should go: the HTTPS port (0 = no certificate, HTTPS off)."""
-    return jsonify({"https_port": app.config.get("HTTPS_PORT", 0), "host": request.host.rsplit(":", 1)[0],
+    host = request.host.rsplit(":", 1)[0] if not request.host.endswith("]") else request.host
+    lan = tls.lan_addresses()
+    names = tls.STATUS.get("names") or []
+    port = app.config.get("HTTPS_PORT", 0)
+    return jsonify({"https_port": port, "host": host, "https": dict(tls.STATUS), "lan_addresses": lan,
+                    "urls": [f"https://{ip}:{port}/map" for ip in lan] if port else [],
+                    "cert_missing_ips": [ip for ip in lan if names and ip not in names],
                     "session": mapping.SESSION.describe() if mapping.SESSION else None})
 
 
@@ -559,7 +565,7 @@ _init_lock = threading.Lock()
 _initialised = False
 
 
-def create_app(config_path=None, start=True, https_host=None):
+def create_app(config_path=None, start=True):
     """Load .env and the config, install access control, start the threads. Safe to call twice.
     gunicorn must run ONE worker: the sACN / DDP sockets and the controller sessions live in
     the process, and a second worker would fight over UDP 5568 and the rt tokens."""
@@ -582,8 +588,10 @@ def create_app(config_path=None, start=True, https_host=None):
             log.warning(w)
         if start:
             start_threads()
-            https_host = os.environ.get("HTTPS_HOST") or https_host or os.environ.get("HOST") or "0.0.0.0"
-            app.config["HTTPS_PORT"] = tls.start(app, https_host, int(os.environ.get("HTTPS_PORT", "5121") or 0))
+            # every interface unless HTTPS_HOST says otherwise: it only exists for a phone on the LAN,
+            # so following HOST=127.0.0.1 (the run.py default) would make it unreachable
+            app.config["HTTPS_PORT"] = tls.start(app, os.environ.get("HTTPS_HOST") or "0.0.0.0",
+                                                  int(os.environ.get("HTTPS_PORT", "5121") or 0))
         _initialised = True
     return app
 
@@ -598,7 +606,7 @@ def main(argv=None):
     load_env()
     host = args.host or os.environ.get("HOST") or "127.0.0.1"
     port = args.port or int(os.environ.get("PORT") or DEFAULT_PORT)
-    create_app(args.config, https_host=host)
+    create_app(args.config)
     log.info("web UI on http://%s:%d", host, port)
     # No reloader (it would start every thread twice) and no Werkzeug debugger (it offers a
     # Python console to anyone who can reach the port).

@@ -4,6 +4,23 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.5.1] - 2026-11-05
+
+Fixes for the phone page not loading:
+
+- **Plain `http://` on the HTTPS port is redirected** to `https://` (301). Safari tries
+  plain HTTP when the address is typed without `https://`, and the bridge used to drop
+  those connections, so the page "didn't load".
+- **HTTPS listens on every interface by default.** Under `run.py` / `run.bat` it followed
+  `HOST`, and the `.env` that install.bat creates sets `HOST=127.0.0.1`, so the phone could
+  not reach it unless the bridge was started with `--host 0.0.0.0`. `HTTPS_HOST` still
+  overrides.
+- The desk UI's *Camera mapping* panel shows what is going on: the exact addresses to open,
+  where HTTPS is listening, why it is off (e.g. no certificate), and whether the certificate
+  is missing one of this machine's IPs. The start-up log prints the phone address(es).
+- Tests for the HTTPS listener: TLS, the redirect, stalled connections, a missing
+  certificate.
+
 ## [0.5.0] - 2026-11-05
 
 - **Camera mapping from a phone** (`https://<bridge>:5121/map`). The bridge lights every
