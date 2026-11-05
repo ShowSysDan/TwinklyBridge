@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Camera mapping</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="mob">
+<header class="mobhead">
+  <h1>Camera mapping <span class="ver">{{ version }}</span></h1>
+  <a href="/" class="quietlink">Bridge</a>
+</header>
+
+<section id="insecure" class="mobcard" hidden>
+  <h2>Open this page over HTTPS</h2>
+  <p>Phones only let a web page use the camera on an <strong>https://</strong> address.</p>
+  <p id="httpsLink"></p>
+  <p class="hint">The bridge uses its own certificate, so the phone warns the first time. On iPhone:
+    <em>Show Details</em>, then <em>visit this website</em>, then <em>Visit Website</em>.</p>
+</section>
+
+<section id="setup" class="mobcard" hidden>
+  <h2>1. What to map</h2>
+  <div id="ctrlList" class="checks"></div>
+  <label class="row">LED brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
+  <label class="row">Wait after each pattern (ms) <input type="number" id="settle" value="300" min="50" max="3000" step="50"></label>
+  <p class="hint">Darken the room if you can. Put the phone on a tripod or lean it on something: it must not move
+    during the run (about 20 s). Every LED you want mapped has to be in the picture. Mapping several controllers
+    together puts them in one shared picture.</p>
+  <button id="camBtn" class="big primary">2. Open the camera</button>
+</section>
+
+<section id="cam" hidden>
+  <div class="viewport">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="overlay" id="overlay"></div>
+    <div class="progress" id="progressWrap" hidden><div id="progress"></div></div>
+  </div>
+  <div class="mobbar">
+    <button id="runBtn" class="big primary">3. Start mapping</button>
+    <button id="cancelBtn" class="big">Cancel</button>
+  </div>
+  <p class="hint center" id="camHint">Frame the whole installation, then hold still.</p>
+</section>
+
+<section id="result" hidden>
+  <div class="viewport"><canvas id="resultCanvas"></canvas></div>
+  <div class="mobcard">
+    <h2 id="resultTitle">Result</h2>
+    <p id="resultSummary"></p>
+    <div id="report"></div>
+  </div>
+  <div class="mobbar">
+    <button id="saveBtn" class="big primary">Save map</button>
+    <button id="retryBtn" class="big">Try again</button>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+<script src="{{ url_for('static', filename='js/mapdecode.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mapping.js') }}" data-https-port="{{ https_port }}" id="mappingScript"></script>
+</body>
+</html>

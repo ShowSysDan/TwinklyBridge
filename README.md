@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.4.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.5.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -44,6 +44,7 @@ the real-time protocol, which is what this bridge does.
 | **Hands-off modes** | A controller enters `rt` when data arrives for its range, `rt` is re-asserted every 30 s, tokens re-login on 401, and after the idle timeout the controller returns to the movie / effect / playlist it was playing |
 | **Camera maps** | *Pull map* reads the 2D / 3D layout stored on the controller (`layout/full`), or upload a CSV |
 | **Test patterns** | Channels, ports, index markers, chase, gradient, rainbow, solid, and a pixel stepper, on one controller or all, to prove every pixel answers before mapping |
+| **Camera mapping (phone)** | The bridge flashes coded patterns, an iPhone / Android browser photographs them and works out every LED's position, each port's real string length and its colour order. About 15 s |
 | **Parameter count** | As soon as a map is in, how many Eos parameters it uses, per controller and in total (see [Parameter count](#parameter-count)) |
 | **Live map** | Every LED drawn where it really is, lit with the frames going out; click one to flash it and read its controller / port / LED |
 | **Auto patch** | Every controller on contiguous universes (170 RGB pixels / 510 channels each), ordered by group offset |
@@ -64,7 +65,10 @@ the real-time protocol, which is what this bridge does.
   python-dotenv, and gunicorn on Linux).
 - Network: the bridge PC must reach each controller on **TCP 80** and **UDP 7777**, and
   receive **UDP 5568** (sACN) and/or **UDP 4048** (DDP) from the console. The web UI is
-  on **TCP 5120**. See [Across a VLAN / firewall](#across-a-vlan--firewall).
+  on **TCP 5120**, and the phone page for camera mapping on **TCP 5121** (HTTPS). See
+  [Across a VLAN / firewall](#across-a-vlan--firewall).
+- `openssl`, to make the HTTPS certificate for the phone: on Linux `sudo apt install openssl`
+  (usually already there); on Windows it comes with Git for Windows.
 - Linux with systemd for the service install. Windows and macOS run it with `run.py`.
 
 ---
@@ -117,7 +121,8 @@ The script:
 1. creates `venv/` and installs `requirements.txt` into it (as your user, not root);
 2. creates `.env` from `.env.example` if there isn't one (mode 600);
 3. creates `instance/` (mode 700), where the bridge saves its controllers and patch
-   (`instance/bridge_config.json`);
+   (`instance/bridge_config.json`), and a self-signed HTTPS certificate there for the phone
+   page (`instance/cert.pem`, `key.pem`; see [Camera mapping](#camera-mapping-phone));
 4. writes `/etc/systemd/system/twinkly-bridge.service` for your user and this folder
    (gunicorn, one worker, sandboxed: no privileges, read-only file system except
    `instance/`, restart forever), then enables and starts it;
@@ -133,9 +138,19 @@ PORT=8080 sudo bash install.sh
 HOST=10.1.1.5 sudo bash install.sh
 ```
 
-`PORT` is the web UI port (default 5120); `HOST` binds the UI to one interface (default
-`0.0.0.0`, every interface). Ports below 1024 work: the unit then gets just
-`CAP_NET_BIND_SERVICE`.
+```bash
+HTTPS_PORT=5121 sudo bash install.sh
+```
+
+```bash
+NEW_CERT=1 sudo bash install.sh
+```
+
+`PORT` is the web UI port (default 5120); `HOST` binds the UI (and HTTPS) to one interface
+(default `0.0.0.0`, every interface); `HTTPS_PORT` is the phone page's HTTPS port (default
+5121, `0` turns it off); `NEW_CERT=1` makes a new certificate, e.g. after the machine's IP
+address changed (the phone then warns once more). Ports below 1024 work: the unit then gets
+just `CAP_NET_BIND_SERVICE`.
 
 ### 4. Open the firewall (if one is on)
 
@@ -153,6 +168,10 @@ sudo ufw allow 5568/udp comment 'twinkly-bridge sACN'
 sudo ufw allow 4048/udp comment 'twinkly-bridge DDP'
 ```
 
+```bash
+sudo ufw allow 5121/tcp comment 'twinkly-bridge phone (HTTPS)'
+```
+
 Outbound traffic to the controllers (TCP 80, UDP 7777) is normally allowed already.
 
 ### 5. Check it
@@ -165,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.4.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.5.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -252,8 +271,9 @@ run.bat --host 0.0.0.0
 ```
 
 (double-clicking `run.bat` starts it on `127.0.0.1` only: the UI is reachable from this PC
-but not the LAN). Leave the window open while the bridge is in use; closing it stops the
-bridge. Open <http://localhost:5120>.
+but not the LAN, and the phone can't reach the camera-mapping page). Leave the window open
+while the bridge is in use; closing it stops the bridge. Open <http://localhost:5120>; the
+phone page is `https://<this PC's IP>:5121/map`.
 
 To always listen on the LAN without typing the option, set `HOST=0.0.0.0` in `.env`.
 
@@ -273,6 +293,10 @@ New-NetFirewallRule -DisplayName "twinkly-bridge DDP" -Direction Inbound -Protoc
 
 ```bash
 New-NetFirewallRule -DisplayName "twinkly-bridge web UI" -Direction Inbound -Protocol TCP -LocalPort 5120 -Action Allow
+```
+
+```bash
+New-NetFirewallRule -DisplayName "twinkly-bridge phone (HTTPS)" -Direction Inbound -Protocol TCP -LocalPort 5121 -Action Allow
 ```
 
 ### 6. Start it automatically (optional)
@@ -381,6 +405,48 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 
+### Camera mapping (phone)
+
+Maps where every LED is, from a phone's camera, when the controller has no map to pull
+(Twinkly Pro keeps the app's map in the cloud). In the same run it measures each port's
+real string length and checks its colour order.
+
+1. **Open the page on the phone**: `https://<bridge-ip>:5121/map` (the desk UI's *Camera
+   mapping* panel shows the exact address). The bridge's certificate is self-signed, so the
+   first time the phone warns: on iPhone tap *Show Details*, *visit this website*, *Visit
+   Website*. Phones only allow a web page to use the camera over HTTPS, which is why this
+   page is on its own port. (Windows: start the bridge with `run.bat --host 0.0.0.0`.)
+2. **Tick the controllers** to map. Map controllers that share a camera view together: they
+   end up in one coordinate space, so the Eos export can lay them out as one map.
+3. **Open the camera** (allow it), frame the whole installation, and hold the phone still:
+   a tripod, or leaned against something. Darken the room if you can.
+4. **Start mapping.** The LEDs flash about 28 patterns (≈15 s for 1,250 LEDs); keep still
+   until it says *Working it out*.
+5. **Check the result**: the photo with a dot on every LED found, coloured by port, and a
+   table per port:
+
+   | Column | Meaning |
+   |---|---|
+   | Set / Seen | LEDs configured on the port / LEDs the camera found |
+   | Ends at | the last LED seen: the string's real length. *string ends at LED 200 of 250 configured* means 50 configured LEDs don't exist (or are out of frame) |
+   | Colours | what the camera saw when the bridge sent red, green, blue: `RGB` is right; `GRB` (*red sent, green seen*) means those strings take a different colour order |
+
+6. **Save map** stores it as the controller's map (`camera, 1200 seen, 50 filled`); LEDs not
+   seen are filled in along their string. *Try again* repeats without saving.
+
+Tips: brightness around 128 is usually right (raise it in a bright room, lower it if LEDs
+bloom into each other); raise *Wait after each pattern* if the phone's camera is slow to
+settle and many LEDs are missed. If it says the camera moved, run it again. LEDs hidden from
+the camera in one run can be filled by mapping again from another angle later, or by
+uploading a CSV.
+
+How it works: every LED gets a number, written in Gray code, one bit per pattern and each
+pattern followed by its inverse. The phone reads each camera pixel's bits back as an LED
+number, then takes the centre of each LED's pixels. Neighbouring LEDs differ in one bit, so a
+pixel blurred between two decodes to one of them, never to a stranger; the inverse pairs
+keep the camera's auto-exposure steady and give each bit its own confidence. All the image
+work happens in the phone's browser.
+
 ### Test patterns: prove every pixel first
 
 Before mapping or programming, check the bridge really controls each pixel. In the
@@ -479,7 +545,8 @@ Controllers are addressed by IP; nothing depends on broadcast discovery. Open:
 
 - bridge PC → each controller: **TCP 80** and **UDP 7777**, outbound only.
 - Eos → bridge PC: **UDP 5568** (sACN), or **UDP 4048** for DDP sources.
-- operators' browsers → bridge PC: **TCP 5120** (web UI).
+- operators' browsers → bridge PC: **TCP 5120** (web UI), and the phone used for camera
+  mapping → bridge PC: **TCP 5121** (HTTPS).
 
 Multicast sACN doesn't cross VLANs without IGMP/PIM. Untick *Join multicast groups* and set
 the sender to unicast to the bridge's IP.
@@ -521,6 +588,9 @@ are set in the web UI and stored in `instance/bridge_config.json`.
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `SYSLOG_HOST` | *(unset)* | Remote syslog server for every log line |
 | `SYSLOG_PORT` / `SYSLOG_PROTO` / `SYSLOG_FACILITY` | `514` / `udp` / `local0` | Remote syslog details (facility also applies to local syslog) |
+| `HTTPS_PORT` | `5121` | HTTPS port for the phone (camera mapping); `0` = off. The Linux service takes it from `install.sh` |
+| `HTTPS_HOST` | same as `HOST` | Bind address for HTTPS under `run.py` |
+| `TLS_CERT` / `TLS_KEY` | `instance/cert.pem` / `instance/key.pem` | Certificate for HTTPS (made by the installers; replace with one from `mkcert` or your own CA to avoid the warning) |
 | `TWINKLY_BRIDGE_CONFIG` | `instance/bridge_config.json` | Where the bridge saves its config (`--config` on `run.py` overrides it) |
 
 ---
@@ -564,6 +634,13 @@ POST /api/controllers/<id>/test          {"mode": "pattern"|"pixel"|"solid"|"off
                                           "index": 10, "rgb": [255,0,0], "speed": 25, "seconds": 3}
 POST /api/test                           same body plus "ids": [...] (omit = every enabled controller)
 GET  /api/patterns                       pattern names and what each checks
+GET  /map                                phone page for camera mapping (open over https://)
+GET  /api/mapping/info                   {"https_port", "host", "session"}
+POST /api/mapping/start                  {"ids": [...], "level": 128} -> session, steps, controllers and offsets
+POST /api/mapping/step                   {"session", "step"}: returns once that frame is out on every controller
+POST /api/mapping/save                   {"session", "points": [[x,y]|null...], "colours": ["RGB"|...], "save": true}
+                                          -> per controller found / filled and a per-port report
+POST /api/mapping/stop
 GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB
 GET  /api/export/eos_patch.csv           same parameters
@@ -622,12 +699,14 @@ TwinklyBridge/
 │   ├── layout.py            # maps -> pixel grid, auto patch, parameter_summary()
 │   ├── exports.py           # Eos pixel map / patch sheet CSV, preview SVG
 │   ├── patterns.py          # test patterns
+│   ├── mapping.py           # camera mapping: Gray-coded frames, gap filling, per-port report
+│   ├── tls.py               # HTTPS listener for the phone page
 │   ├── security.py          # allowlist, password, cross-site blocking, headers
 │   ├── logs.py              # console / local syslog / remote syslog
-│   ├── static/              # css/style.css, js/app.js
-│   └── templates/index.html
+│   ├── static/              # css/style.css, js/app.js, js/mapping.js (phone), js/mapdecode.js
+│   └── templates/           # index.html (desk), map.html (phone)
 ├── docs/protocol.md
-├── tools/                   # standalone diagnostic scripts
+├── tools/                   # standalone diagnostic scripts, make_cert.py (HTTPS certificate)
 ├── tests/                   # pytest + mock controller
 ├── run.py                   # start with Flask's server (Windows, macOS, by hand)
 ├── wsgi.py                  # gunicorn entry point (Linux service)

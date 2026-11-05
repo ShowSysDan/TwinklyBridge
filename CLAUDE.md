@@ -25,5 +25,8 @@ README.md has the design, install steps and API; docs/protocol.md the Twinkly wi
   controller faults at WARNING once per new error (`Controller._fail`).
 - The output loop and the control thread must never block on each other: HTTP to
   controllers only on the control thread or in request handlers.
+- Camera mapping: the bridge side (frames, gap filling, report) is `bridge/mapping.py`; the
+  image work is `bridge/static/js/mapdecode.js`, which must stay a pure function usable in
+  Node (`tests/js/mapdecode_sim.js` runs it against a synthetic camera).
 - Parameter counts come from `Controller.parameters` / `layout.parameter_summary()`;
   don't recompute them elsewhere.

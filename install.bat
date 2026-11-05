@@ -12,6 +12,8 @@ venv\Scripts\python.exe -m pip install --quiet -r requirements.txt || (echo pip 
 if not exist .env copy .env.example .env >nul && echo Created .env from .env.example
 if not exist instance mkdir instance
 if exist bridge_config.json if not exist instance\bridge_config.json move bridge_config.json instance\bridge_config.json >nul && echo Moved bridge_config.json into instance\
+venv\Scripts\python.exe tools\make_cert.py
 echo.
-echo Installed. Start the bridge with run.bat ^(add --host 0.0.0.0 to reach the UI from other PCs^).
+echo Installed. Start the bridge with:  run.bat --host 0.0.0.0
+echo Phone camera mapping: https://^<this PC's IP^>:5121/map ^(accept the certificate warning once^).
 pause

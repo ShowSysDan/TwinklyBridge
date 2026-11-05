@@ -202,6 +202,12 @@ $('#tPattern').onchange = () => { $('#tDesc').textContent = patterns[$('#tPatter
 $('#tStart').onclick = () => runTest({mode: 'pattern', pattern: $('#tPattern').value, rgb: colourRGB(),
                                       speed: +$('#tSpeed').value, seconds: +$('#tSecs').value});
 $('#tStop').onclick = () => runTest({mode: 'stop', ids: status.controllers.map(c => c.id)});
+api('/api/mapping/info').then(m => {
+  const host = location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? '<this PC\'s IP>' : location.hostname;
+  $('#mapInfo').innerHTML = m.https_port
+    ? `On the phone, open <strong>https://${esc(host)}:${m.https_port}/map</strong> and accept the certificate warning once.`
+    : 'HTTPS is off (no certificate), and phones only allow the camera over HTTPS. Re-run install.sh / install.bat, then restart.';
+}).catch(() => { $('#mapInfo').textContent = 'unavailable'; });
 api('/api/patterns').then(p => {
   patterns = p;
   $('#tPattern').innerHTML = Object.keys(p).map(k => `<option value="${k}">${k}</option>`).join('');
