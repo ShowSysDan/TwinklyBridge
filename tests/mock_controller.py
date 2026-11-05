@@ -56,6 +56,8 @@ class MockState:
         self.parts = {}
         self.complete = b""                 # last fully received rt frame
         self.no_layout = False              # True: answer layout/full with 404, like an unmapped controller
+        self.revoked = False                # True: another client logged in; our token is refused (HTTP 401,
+                                            # UDP frames dropped) until we log in again
         self.lock = threading.Lock()
 
     @property
@@ -80,6 +82,8 @@ def make_handler(state):
 
         def do_GET(self):
             state.log.append(("GET", self.path))
+            if self.headers.get("X-Auth-Token") and state.revoked:
+                return self._send(401, {"result": {"code": 1401}})
             if self.path == "/xled/info":
                 return self._send(200, INFO)
             if self.path == "/xled/v2/gestalt":
@@ -97,9 +101,10 @@ def make_handler(state):
             body = self.rfile.read(n)
             state.log.append(("POST", self.path, len(body)))
             if self.path == "/xled/v2/login":
+                state.revoked = False
                 return self._send(200, {"authentication_token": TOKEN, "authentication_token_expires_in": 14400,
                                         "challenge-response": hashlib.sha1(body).hexdigest(), "result": {"code": 1000}})
-            if self.headers.get("X-Auth-Token") != TOKEN:
+            if self.headers.get("X-Auth-Token") != TOKEN or state.revoked:
                 return self._send(401, {"result": {"code": 1401}})
             if self.path == "/xled/v2/verify":
                 return self._send(200, {"result": {"code": 1000}})
@@ -146,6 +151,8 @@ class MockController:
                 continue
             except OSError:
                 break
+            if d[0] == 3 and d[1:9] == raw and d[9:11] == b"\x00\x00" and self.state.revoked:
+                continue                                  # a stale token's frames are silently dropped
             if d[0] == 3 and d[1:9] == raw and d[9:11] == b"\x00\x00":
                 with self.state.lock:
                     if d[11] == 0:

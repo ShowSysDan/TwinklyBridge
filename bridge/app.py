@@ -180,11 +180,23 @@ def api_mapping_step():
 
 @app.post("/api/mapping/stop")
 def api_mapping_stop():
+    """Hand the LEDs back: ends the mapping session and any mapping / coverage / aim frames on
+    every controller. Takes no body (the phone also sends it as its page closes)."""
     with mapping.lock:
-        if mapping.SESSION:
-            for c in mapping.SESSION.ctrls:
-                c.test = None
-            mapping.SESSION = None
+        mapping.SESSION = None
+        with lock:
+            for c in CONTROLLERS.values():
+                if c.test and c.test.get("pattern") in ("mapping", "coverage"):
+                    c.test = None
+    return jsonify(ok=True)
+
+
+@app.post("/api/mapping/log")
+def api_mapping_log():
+    """The phone reports camera trouble (stalled, restarted, ...) into the bridge's log."""
+    body = request.get_json(force=True) or {}
+    msg = str(body.get("msg", ""))[:300].replace("\n", " ")
+    log.info("phone %s: %s", client_ip(), msg)
     return jsonify(ok=True)
 
 
@@ -294,7 +306,8 @@ def api_mapping_view():
                           "pitch": body.get("pitch"), "moved": bool(body.get("moved")), "time": time.time()})
     mapping.save_views(data)
     for c in s.ctrls:
-        c.test = {"frame": s.coverage(c, now, before), "until": time.time() + 600, "pattern": "coverage"}
+        # shown for 2 minutes, then the LEDs go back to sACN / the controller's own mode
+        c.test = {"frame": s.coverage(c, now, before), "until": time.time() + 120, "pattern": "coverage"}
     union, cols = _union(data)
     rep = _store_maps(s.ctrls, s.offsets, union, cols, False, "", partial=True)
     log.info("mapping view %d at %s deg kept by %s: %d LEDs (%d new)", len(data["views"]), body.get("angle"),

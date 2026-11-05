@@ -79,3 +79,35 @@ def test_pattern_reaches_controller(bridge, mock):
     assert client.post("/api/test", json={"mode": "pattern", "pattern": "bogus"}).status_code == 400
     client.post("/api/test", json={"mode": "stop"})
     assert client.get("/api/status").get_json()["controllers"][0]["testing"] is False
+
+
+def test_bridge_takes_the_controller_back(bridge, mock):
+    """Another app (the Twinkly app) switches the controller to another mode, or logs in and
+    makes our token stale (its UDP frames are then silently dropped): while streaming, the
+    bridge notices within a few seconds and takes it back."""
+    import time
+    client, appmod, state = bridge
+    cid = client.get("/api/status").get_json()["controllers"][0]["id"]
+
+    def wait(pred, t=12):
+        end = time.time() + t
+        while time.time() < end:
+            if pred():
+                return True
+            time.sleep(0.1)
+        return False
+
+    try:
+        assert client.post("/api/test", json={"ids": [cid], "mode": "pattern", "pattern": "solid",
+                                              "rgb": [0, 0, 200], "seconds": 60}).get_json()["ok"]
+        assert wait(lambda: mock.state.mode == {"mode": "rt"} and mock.state.last_frame[:3] == bytes([0, 0, 200]))
+        mock.state.mode = {"mode": "movie"}                       # another app switches it away
+        assert wait(lambda: mock.state.mode == {"mode": "rt"}), "mode not taken back"
+        assert "switched to movie" in client.get("/api/status").get_json()["controllers"][0]["taken"]
+        mock.state.revoked = True                                 # another app logs in: our token is stale
+        frames = mock.state.frames
+        assert wait(lambda: not mock.state.revoked and mock.state.frames > frames + 5), "login not taken back"
+        assert "login replaced" in client.get("/api/status").get_json()["controllers"][0]["taken"]
+    finally:
+        mock.state.revoked = False
+        client.post("/api/test", json={"mode": "stop"})

@@ -57,7 +57,8 @@ function renderControllers() {
         <input type="file" accept=".csv,text/csv" hidden data-a="csvfile">
       </div>
       ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}
-      ${c.map_error ? `<div class="err">${esc(c.map_error)}</div>` : ''}`;
+      ${c.map_error ? `<div class="err">${esc(c.map_error)}</div>` : ''}
+      ${c.taken ? `<div class="hint warnline">Another app took this controller (${esc(c.taken)}); the bridge took it back. Close the Twinkly app while the bridge is in use.</div>` : ''}`;
     el.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('change', async () => {
       const k = inp.dataset.k, v = inp.type === 'checkbox' ? inp.checked : inp.value;
       try { await api(`/api/controllers/${c.id}`, {method: 'PUT', body: JSON.stringify({[k]: v})}); toast('Patched'); refresh(); }

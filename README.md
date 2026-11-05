@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.11.1** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.11.2** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.11.1", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.11.2", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -553,6 +553,17 @@ The **Pixel stepper** lights one LED (index in chain order, from 0) for 30 s; -1
 ▶ / +10 move it, and the readout gives its port and LED number, e.g. `251 = port 1, LED 2`.
 The *Flash red* / *Blackout 3 s* buttons on each card and clicking an LED on the live map
 still work too.
+
+### If the LEDs don't respond
+
+- **Close the Twinkly app** (swipe it away) while the bridge drives the controllers. The app
+  logs in to the controller itself, which makes the bridge's login stale (the controller then
+  ignores its frames) or switches the controller to another mode. The bridge notices within
+  5 s and takes it back, and the controller's card says so, but the two keep fighting while
+  the app is open.
+- A phone left on the camera-mapping page makes the LEDs blink for its live view; it stops
+  when the phone locks, the page is closed, or after 2 minutes, and *Stop all tests* on the
+  desk page stops it at once.
 
 ### If Pull map fails
 

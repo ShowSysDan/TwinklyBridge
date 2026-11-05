@@ -4,6 +4,28 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.11.2] - 2026-11-05
+
+LEDs not lighting for test patterns or mapping:
+
+- **The bridge takes the controller back from another app.** The Twinkly app (open on a
+  phone) logs in to the controller itself, which makes the bridge's login stale - the
+  controller then silently drops the bridge's frames - or switches it to another mode; the
+  bridge only re-asserted rt every 30 s. While streaming it now checks the controller's mode
+  every 5 s and, if another app switched it or replaced the login, logs in again and takes
+  it back at once. The controller's card says when this happened ("Another app took this
+  controller ..."); close the Twinkly app while the bridge is in use. Tested against the mock
+  for both cases.
+- **The phone page hands the LEDs back**: the live aim view stops blinking when the page is
+  hidden, the phone locked or the tab closed (and tells the bridge), and by itself after 2
+  minutes without a capture (*Resume the live view* restarts it); coverage colours show for 2
+  minutes instead of 10. `POST /api/mapping/stop` now also clears any leftover mapping or
+  coverage frames.
+- **Camera watchdog on the live view**: a paused preview is restarted and a stopped camera
+  (ended, or no picture for 2 s) reopened; a line under the picture shows the camera's size
+  and frame rate, or what is wrong. Camera trouble is reported to the bridge's log
+  (`POST /api/mapping/log`).
+
 ## [0.11.1] - 2026-11-05
 
 - Frozen-camera check made safe: identical frames only count when the picture isn't nearly
