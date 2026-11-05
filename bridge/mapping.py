@@ -37,15 +37,17 @@ def gray(v):
 
 
 class Session:
-    """One capture. Coding frames light LEDs full on in one channel (green, 255): a channel at
-    255 isn't dimmed by PWM, so a phone's rolling shutter can't catch it half-off (dark bands
-    across the photo), and phone sensors are most sensitive to green. `level` only sets the
+    """One capture. Coding frames light LEDs in one channel (green: what phone sensors see
+    best) at `code_level`: 255 by default, which isn't dimmed by PWM, so a phone's rolling
+    shutter can't catch it half off. The phone may pick a lower level (less bloom and
+    clipping) after measuring that it doesn't flicker on its camera. `level` only sets the
     coverage colours shown between captures."""
 
     def __init__(self, ctrls, level=128):
         self.id = secrets.token_hex(6)
         self.ctrls = list(ctrls)
         self.level = max(8, min(255, int(level)))
+        self.code_level = 255
         self.offsets, g = {}, 0
         for c in self.ctrls:
             self.offsets[c.id] = g
@@ -73,9 +75,9 @@ class Session:
         base = self.offsets[c.id]
         if step in ("red", "green", "blue"):
             k = ("red", "green", "blue").index(step)
-            return pack(c, [tuple(255 if j == k else 0 for j in range(3))] * c.n_led)
+            return pack(c, [tuple(self.code_level if j == k else 0 for j in range(3))] * c.n_led)
         on = [self.lit(base + i, step) for i in range(c.n_led)]
-        return pack(c, [(0, 255, 0) if x else (0, 0, 0) for x in on])
+        return pack(c, [(0, self.code_level, 0) if x else (0, 0, 0) for x in on])
 
     def coverage(self, c, now, before, level=None):
         """What the installation shows between captures: green = found in the capture just
@@ -90,7 +92,7 @@ class Session:
 
     def describe(self):
         return {"session": self.id, "total": self.total, "bits": self.bits, "steps": self.steps,
-                "level": self.level,
+                "level": self.level, "code_level": self.code_level,
                 "controllers": [{"id": c.id, "name": c.name, "n_led": c.n_led, "offset": self.offsets[c.id],
                                  "ports": c.ports} for c in self.ctrls]}
 

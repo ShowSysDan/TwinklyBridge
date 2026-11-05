@@ -141,3 +141,19 @@ def test_capture_photos_upload_and_zip(bridge, tmp_path, monkeypatch):
     assert client.post("/api/mapping/captures/ok/a.png", data=png, content_type="text/plain").status_code == 415
     assert client.delete("/api/mapping/captures/2026-11-05T10-00-00_90deg").get_json()["ok"]
     assert client.get("/api/mapping/captures").get_json() == []
+
+
+def test_step_sets_the_coding_level(bridge, mock):
+    client, appmod, state = bridge
+    cid = client.get("/api/status").get_json()["controllers"][0]["id"]
+    try:
+        s = client.post("/api/mapping/start", json={"ids": [cid]}).get_json()
+        assert s["code_level"] == 255
+        assert client.post("/api/mapping/step", json={"session": s["session"], "step": "white", "level": 56}).status_code == 200
+        assert mock.state.last_frame[:6] == bytes([0, 56, 0, 0, 56, 0])            # all-on, green at 56
+        client.post("/api/mapping/step", json={"session": s["session"], "step": "b0"})
+        assert set(mock.state.last_frame[1::3]) == {0, 56}                         # and it sticks for the patterns
+        client.post("/api/mapping/step", json={"session": s["session"], "step": "white", "level": 999})
+        assert mock.state.last_frame[1] == 255                                     # clamped
+    finally:
+        client.post("/api/mapping/stop")

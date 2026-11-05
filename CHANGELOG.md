@@ -4,6 +4,26 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.8.0] - 2026-11-05
+
+- **Live aim view.** As soon as the camera opens, the bridge blinks the LEDs (all on / off,
+  about once a second) and the phone keeps each pixel's brightest and darkest value of the
+  last two seconds: the difference is LED light, whatever the camera's lag. The preview is
+  overlaid green where the camera sees LEDs and red where they clip, with the share clipped
+  and a warning when LEDs reach the edge of the picture (some probably out of frame).
+- **Automatic LED level.** Each capture first lights the all-on frame at 255, 160, 96, 56
+  and 32 and, at each, compares two photos of the steady frame (if they differ where the
+  LEDs are, the PWM dimming flickers on this camera) and counts clipped LED pixels. The
+  coding patterns use the brightest level that doesn't flicker and hardly clips; full 255 if
+  every dimmed level flickers. The result shows the level and what each level did; the aim
+  view then blinks at that level. The bridge takes `"level"` on `POST /api/mapping/step`.
+- **Photos stream to the bridge after every capture** (on by default, a checkbox on the
+  camera screen), so a capture is always there to download from the desk page.
+- Tested with a fake camera lagging 250 ms with 3x gain: without flicker it chose 56 (255,
+  160 and 96 clipped 44%), with flicker below 255 it kept 255; all 1,250 LEDs found both times.
+- Decoding stays on the phone (fast there; the bridge would need numpy / OpenCV to match);
+  the streamed photos are there for processing on the bridge later if it is ever needed.
+
 ## [0.7.0] - 2026-11-05
 
 Camera mapping: identifying LEDs on a real camera.

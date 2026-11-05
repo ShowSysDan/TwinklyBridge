@@ -39,6 +39,7 @@
 <section id="cam" hidden>
   <div class="viewport">
     <video id="video" playsinline muted autoplay></video>
+    <canvas id="aim" class="aimlayer"></canvas>
     <div class="overlay" id="overlay"></div>
     <div class="progress" id="progressWrap" hidden><div id="progress"></div></div>
   </div>
@@ -47,6 +48,8 @@
       <input type="number" id="angle" value="0" min="0" max="359" step="1"></label>
     <div class="anglebtns" id="angleBtns"></div>
     <p class="hint" id="sensors">Compass and tilt: allow motion access when asked.</p>
+    <p class="hint" id="aimInfo">The LEDs blink while you aim: green on the picture = LEDs the camera sees, red = too bright (clipped).</p>
+    <label class="checkrow"><input type="checkbox" id="autoSend" checked><span>Send the photos to the bridge after each capture</span></label>
   </div>
   <div class="mobbar">
     <button id="runBtn" class="big primary">3. Capture</button>

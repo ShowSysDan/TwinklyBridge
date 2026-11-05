@@ -162,12 +162,15 @@ def _session(body):
 
 @app.post("/api/mapping/step")
 def api_mapping_step():
-    """body: {"session": id, "step": "white"} -> returns once the frame is out on every controller."""
+    """body: {"session": id, "step": "white", "level": 255 (optional: the coding frames' LED
+    level from now on)} -> returns once the frame is out on every controller."""
     body = request.get_json(force=True) or {}
     s = _session(body)
     step = body.get("step")
     if step not in s.steps:
         return jsonify(error=f"unknown step {step!r}"), 400
+    if body.get("level") is not None:
+        s.code_level = max(8, min(255, int(body["level"])))
     t = time.time()
     late = _deliver(s.ctrls, {c.id: s.frame(c, step) for c in s.ctrls})
     if late:

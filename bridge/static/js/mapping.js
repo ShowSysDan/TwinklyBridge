@@ -112,7 +112,7 @@ $('#angleBtns').innerHTML = [0, 45, 90, 135, 180, 225, 270, 315].map(a => `<butt
 $('#angleBtns').onclick = e => { const a = e.target.dataset.a; if (a !== undefined) { $('#angle').value = a; angleTouched = true; } };
 
 async function openCamera() {
-  if (stream) { show('cam'); return; }
+  if (stream) { show('cam'); startAim(); return; }
   try {
     stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
       facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}});
@@ -121,6 +121,90 @@ async function openCamera() {
   show('cam'); $('#runBtn').disabled = false;
   $('#overlay').textContent = 'Frame the whole installation, then hold still.';
   try { wake = await navigator.wakeLock.request('screen'); } catch {}
+  startAim();
+}
+
+// ---------------------------------------------------------------- live aim view
+// While you aim, the bridge blinks the LEDs (all on / all off, about once a second) and the
+// phone keeps, per pixel, the brightest and darkest value of the last two seconds. Their
+// difference is the LED light at that pixel whatever the camera's lag, so the overlay shows
+// green where the camera sees LEDs and red where they are clipped (too bright: bloom), and
+// warns when LEDs reach the edge of the picture (some are probably out of frame). It doesn't
+// count LEDs: at this size neighbouring LEDs merge, so a count would be badly low.
+const AIM_W = 320;
+const aim = {on: false, ring: [], blinkLevel: 255, session: null};
+const aimCanvas = document.createElement('canvas');
+const actx = aimCanvas.getContext('2d', {willReadFrequently: true});
+function tickedIds() { return [...document.querySelectorAll('#ctrlList input:checked')].map(i => i.value); }
+async function startAim() {
+  if (aim.on || !stream) return;
+  const ids = tickedIds();
+  if (!ids.length) return;
+  aim.on = true; aim.ring = [];
+  try { aim.session = await api('/api/mapping/start', {ids, level: +$('#level').value}); }
+  catch (e) { aim.on = false; $('#aimInfo').textContent = e.message; return; }
+  aimBlink(); aimLook();
+}
+async function stopAim() {
+  aim.on = false;
+  while (aim.busy) await sleep(30);
+  const cv = $('#aim'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+}
+async function aimBlink() {
+  let lit = false;
+  while (aim.on) {
+    aim.busy = true;
+    lit = !lit;
+    try { await api('/api/mapping/step', {session: aim.session.session, step: lit ? 'white' : 'black', level: aim.blinkLevel}); }
+    catch { aim.busy = false; aim.on = false; return; }
+    aim.busy = false;
+    await sleep(650);
+  }
+}
+async function aimLook() {
+  const v = $('#video'), cv = $('#aim');
+  while (aim.on) {
+    await nextVideoFrame(v);
+    const W = AIM_W, H = Math.max(1, Math.round(v.videoHeight * AIM_W / v.videoWidth));
+    aimCanvas.width = W; aimCanvas.height = H;
+    actx.drawImage(v, 0, 0, W, H);
+    const d = actx.getImageData(0, 0, W, H).data, lum = new Uint8Array(W * H), top = new Uint8Array(W * H);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      lum[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+      top[p] = Math.max(d[i], d[i + 1], d[i + 2]);
+    }
+    aim.ring.push({lum, top, t: performance.now()});
+    while (aim.ring.length && performance.now() - aim.ring[0].t > 2000) aim.ring.shift();
+    if (aim.ring.length < 6 || aim.ring.length % 3) continue;          // update the overlay ~every 3rd frame
+    const N = W * H, hi = new Uint8Array(N), lo = new Uint8Array(N).fill(255), peak = new Uint8Array(N);
+    for (const f of aim.ring) for (let p = 0; p < N; p++) {
+      if (f.lum[p] > hi[p]) hi[p] = f.lum[p];
+      if (f.lum[p] < lo[p]) lo[p] = f.lum[p];
+      if (f.top[p] > peak[p]) peak[p] = f.top[p];
+    }
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
+    let lit = 0, clipped = 0, edge = 0;
+    const mx = Math.max(2, Math.round(W * 0.02)), my = Math.max(2, Math.round(H * 0.02));
+    const amp = new Int16Array(N);
+    for (let p = 0; p < N; p++) {
+      amp[p] = hi[p] - lo[p];
+      if (amp[p] < 25) continue;
+      lit++;
+      const clip = peak[p] >= 250;
+      if (clip) clipped++;
+      const x = p % W, y = (p / W) | 0;
+      if (x < mx || y < my || x >= W - mx || y >= H - my) edge++;
+      img.data[4 * p] = clip ? 255 : 0; img.data[4 * p + 1] = clip ? 40 : 255; img.data[4 * p + 2] = 60;
+      img.data[4 * p + 3] = 170;
+    }
+    ctx.putImageData(img, 0, 0);
+    const share = lit ? Math.round(100 * clipped / lit) : 0;
+    $('#aimInfo').innerHTML = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
+      : `LEDs seen (green), ${share}% of them clipped (red).` +
+        (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
+        (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
+  }
 }
 $('#camBtn').onclick = async () => {
   await startSensors();                       // iOS asks for motion access here (needs this tap)
@@ -214,6 +298,47 @@ async function cameraLag(sessionId) {
   const reach = samples.find(s => s[1] >= 0.9 * lit);
   return {ms: Math.round(reach[0]), roundTrip: Math.round(t1 - t0)};
 }
+// Pick the LED level for the coding patterns from what the camera sees. Dimming LEDs is PWM
+// (switching them on and off fast), which a phone's rolling shutter can catch as stripes;
+// full brightness can clip and bloom. At each level, two photos of the same steady all-on
+// frame: if they differ where the LEDs are, it flickers. Clipped = share of LED pixels at the
+// sensor's maximum. Take the brightest level that doesn't flicker and hardly clips.
+const LEVELS = [255, 160, 96, 56, 32];
+async function chooseLevel(sessionId, settle) {
+  await api('/api/mapping/step', {session: sessionId, step: 'black'});
+  await sleep(settle);
+  const dark = await grab(2, true);
+  const tried = [];
+  let mask = null;
+  for (const L of LEVELS) {
+    await api('/api/mapping/step', {session: sessionId, step: 'white', level: L});
+    await sleep(settle);
+    const a = await grab(1, true);
+    await sleep(70);
+    const b = await grab(1, true);
+    if (!mask) {                                         // where the LEDs are, from full brightness
+      mask = new Uint8Array(a.lum.length);
+      for (let p = 0; p < mask.length; p++) mask[p] = a.lum[p] - dark.lum[p] > 25 ? 1 : 0;
+    }
+    let n = 0, sig = 0, diff = 0, clip = 0;
+    for (let p = 0; p < mask.length; p++) {
+      if (!mask[p]) continue;
+      n++;
+      sig += Math.max(0, a.lum[p] - dark.lum[p]);
+      diff += Math.abs(a.lum[p] - b.lum[p]);
+      if (Math.max(a.r[p], a.g[p], a.b[p]) >= 250) clip++;
+    }
+    const signal = n ? sig / n : 0;
+    tried.push({level: L, signal: Math.round(signal), flicker: signal ? Math.round(100 * diff / n / signal) / 100 : 1,
+                clipped: n ? Math.round(1000 * clip / n) / 10 : 0});
+  }
+  const steady = tried.filter(t => t.flicker < 0.08 && t.signal > 20);
+  const pick = steady.find(t => t.clipped < 2)
+    || steady.slice().sort((x, y) => x.clipped - y.clipped)[0]
+    || tried[0];
+  return {level: pick.level, tried};
+}
+
 // Ask the camera to stop adjusting itself (Android Chrome supports this; iOS Safari ignores it).
 async function lockCamera() {
   const track = stream && stream.getVideoTracks()[0];
@@ -237,6 +362,7 @@ $('#runBtn').onclick = async () => {
   const ids = [...document.querySelectorAll('#ctrlList input:checked')].map(i => i.value);
   if (!ids.length) { toast('Tick at least one controller'); return; }
   $('#runBtn').disabled = true; cancelled = false; decoded = null;
+  await stopAim();
   const minWait = Math.max(50, +$('#settle').value || 300);
   const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle: +$('#angle').value || 0};
   const log = {retakes: {}, started: new Date().toISOString(), ua: navigator.userAgent};
@@ -248,7 +374,12 @@ $('#runBtn').onclick = async () => {
     const lag = await cameraLag(session.session);
     const settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
     log.lag = lag; log.settle = settle;
-    // all-on first: let exposure settle on the LEDs, then lock it (where the phone allows)
+    progress(0, 1, 'Choosing the LED level ...');
+    const lv = await chooseLevel(session.session, settle);
+    log.level = lv;
+    aim.blinkLevel = lv.level;
+    // all-on first at that level: let exposure settle on the LEDs, then lock it (where allowed)
+    await api('/api/mapping/step', {session: session.session, step: 'white', level: lv.level});
     await sleep(settle);
     const shots = {};
     shots.white = await grab(4, true);
@@ -293,6 +424,7 @@ $('#runBtn').onclick = async () => {
     lastReport = await api('/api/mapping/save', {session: session.session, points: decoded.points,
                                                  colours: decoded.colours, save: false}).catch(e => ({error: e.message}));
     showResult();
+    if ($('#autoSend').checked) { sendPhotos.quiet = true; sendPhotos().finally(() => { sendPhotos.quiet = false; }); }
   } catch (e) {
     await unlockCamera();
     toast(e.message); $('#overlay').textContent = e.message;
@@ -301,6 +433,7 @@ $('#runBtn').onclick = async () => {
 };
 $('#cancelBtn').onclick = async () => {
   cancelled = true;
+  await stopAim();
   await api('/api/mapping/stop', {}).catch(() => {});
   stopCamera(); session = null; init();
 };
@@ -346,7 +479,9 @@ function showResult() {
     'Each string runs red &rarr; yellow &rarr; green &rarr; blue &rarr; violet from its first LED: a right string is one smooth rainbow; a dot in the wrong colour is a misread LED.',
     `Camera lag ${decoded.log.lag.ms} ms, waited ${decoded.log.settle} ms per pattern` +
       (Object.keys(decoded.log.retakes).length ? `, ${Object.keys(decoded.log.retakes).length} photos retaken` : '') +
-      (decoded.log.locked.length ? `, locked ${decoded.log.locked.join(', ')}` : '') + '.',
+      (decoded.log.locked.length ? `, locked ${decoded.log.locked.join(', ')}` : '') +
+      `, LED level ${decoded.log.level.level}` +
+      ` (tried ${decoded.log.level.tried.map(t => `${t.level}: ${t.flicker >= 0.08 ? 'flickers' : t.clipped + '% clipped'}`).join(', ')})` + '.',
   ].filter(Boolean).join('<br>');
   const rep = lastReport && lastReport.controllers;
   $('#report').innerHTML = rep ? portTable(rep) : `<p class="bad">${esc((lastReport && lastReport.error) || 'no report')}</p>`;
@@ -364,7 +499,8 @@ function pngOf(shot) {
   ctx.putImageData(img, 0, 0);
   return new Promise(res => cv.toBlob(res, 'image/png'));
 }
-$('#sendBtn').onclick = async () => {
+$('#sendBtn').onclick = () => sendPhotos();
+async function sendPhotos() {
   const btn = $('#sendBtn'); btn.disabled = true;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + `_${Math.round(decoded.meta.angle)}deg`;
   try {
@@ -382,10 +518,10 @@ $('#sendBtn').onclick = async () => {
                           {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(info)});
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     btn.textContent = 'Sent to the bridge';
-    toast(`Saved on the bridge as ${stamp}: download it from the desk page, Camera mapping panel.`, 7000);
+    if (!sendPhotos.quiet) toast(`Saved on the bridge as ${stamp}: download it from the desk page, Camera mapping panel.`, 7000);
   } catch (e) { btn.textContent = 'Send photos to the bridge'; btn.disabled = false; toast(`Sending failed: ${e.message}`); }
-};
-$('#retryBtn').onclick = () => { show('cam'); $('#runBtn').disabled = false; $('#progressWrap').hidden = true;
+}
+$('#retryBtn').onclick = () => { show('cam'); $('#runBtn').disabled = false; $('#progressWrap').hidden = true; startAim();
                                  $('#overlay').textContent = 'Frame the whole installation, then hold still.'; };
 $('#keepBtn').onclick = async () => {
   $('#keepBtn').disabled = true;
