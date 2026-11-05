@@ -4,6 +4,16 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.9.1] - 2026-11-05
+
+- **Clear map** button on each controller card (when it has a map), with a confirmation;
+  the controller then shows "no map" until one is pulled, captured, made from ports or
+  uploaded. (The API was already there: `DELETE /api/controllers/<id>/map`.)
+- The desk page's *Camera mapping* panel lists the camera views kept for building a map and
+  can **discard** them (the phone page already could), so a new walk-around starts afresh.
+- Fix: elements hidden by the page (the live map once no controller has a map, and others)
+  stayed visible, because a CSS display rule beat the `hidden` attribute.
+
 ## [0.9.0] - 2026-11-05
 
 - **Guided walk-around**: one tap maps a 3D piece all the way round. The phone captures a

@@ -49,7 +49,7 @@ function renderControllers() {
         <button data-a="ports" title="One row per port, LEDs in chain order: exact addressing, not physical positions">Map from ports</button>
         <button data-a="probe" title="Ask the controller where its map is (read-only) and show the answers">Diagnose</button>
         <button data-a="csv">Upload CSV</button>
-        ${c.has_map ? `<button data-a="dl">Download CSV</button>` : ''}
+        ${c.has_map ? `<button data-a="dl">Download CSV</button><button data-a="clearmap" class="quiet">Clear map</button>` : ''}
         <button data-a="solid">Flash red</button>
         <button data-a="off">Blackout 3 s</button>
         <button data-a="connect">Reconnect</button>
@@ -90,6 +90,13 @@ function renderControllers() {
       catch (e) { toast(e.message); } refresh();
     };
     const dl = el.querySelector('[data-a=dl]'); if (dl) dl.onclick = () => { location.href = `/api/controllers/${c.id}/map.csv`; };
+    const cm = el.querySelector('[data-a=clearmap]');
+    if (cm) cm.onclick = async () => {
+      if (!confirm(`Clear ${c.name}'s map (${c.map_source})? Download the CSV first if you might want it back.`)) return;
+      try { await api(`/api/controllers/${c.id}/map`, {method: 'DELETE'}); toast(`${c.name}: map cleared`); await loadMaps(); draw(); }
+      catch (e) { toast(e.message); }
+      refresh();
+    };
     el.querySelector('[data-a=solid]').onclick = () => test(c.id, {mode: 'solid', rgb: [255, 0, 0], seconds: 3});
     el.querySelector('[data-a=off]').onclick = () => test(c.id, {mode: 'off', seconds: 3});
     el.querySelector('[data-a=connect]').onclick = async () => { await api(`/api/controllers/${c.id}/connect`, {method: 'POST'}); refresh(); };
@@ -217,6 +224,19 @@ api('/api/mapping/info').then(m => {
     (m.cert_missing_ips.length ? `<br><span class="bad">The certificate doesn't list ${esc(m.cert_missing_ips.join(', '))} ` +
       `(this machine's IP changed?): make a new one with NEW_CERT=1 sudo bash install.sh, or python tools/make_cert.py --force, then restart.</span>` : '');
 }).catch(() => { $('#mapInfo').textContent = 'unavailable'; });
+function loadViews() {
+  api('/api/mapping/views').then(v => {
+    $('#viewsInfo').innerHTML = !v || !v.views.length ? '' :
+      `<p style="margin:10px 0 4px">${v.views.length} camera view${v.views.length > 1 ? 's' : ''} kept for building a map
+       (${v.views.map(x => `${Math.round(x.angle)}&deg;`).join(', ')}). <button id="discardViews" class="quiet">Discard kept views</button></p>`;
+    const b = $('#discardViews');
+    if (b) b.onclick = async () => {
+      if (!confirm('Discard the kept camera views? Saved maps stay as they are.')) return;
+      await api('/api/mapping/views', {method: 'DELETE'}); toast('Kept views discarded'); loadViews();
+    };
+  }).catch(() => {});
+}
+loadViews(); setInterval(loadViews, 15000);
 function loadCaptures() {
   api('/api/mapping/captures').then(list => {
     $('#captures').innerHTML = !list.length ? '' : '<p style="margin:10px 0 4px">Photos sent from the phone (download to look at what the camera saw):</p>' +
