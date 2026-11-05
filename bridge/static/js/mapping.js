@@ -332,16 +332,25 @@ async function chooseLevel(sessionId, settle) {
     // line both photos up with the first one, so a drifting hand doesn't look like flicker
     const a = {lum: MapDecode.alignedLum(a0.lum, a0.W, a0.H, spots), r: a0.r, g: a0.g, b: a0.b};
     const b = {lum: MapDecode.alignedLum(b0.lum, b0.W, b0.H, spots)};
-    let n = 0, sig = 0, diff = 0, clip = 0;
+    // flicker: compare the LED light in 16 x 16 tiles, not pixel by pixel. Flicker (PWM
+    // caught by a rolling shutter) swings whole bands of rows; a hand moving a fraction of a
+    // pixel changes single pixels a lot (LEDs are tiny dots) but a tile's total hardly at all.
+    const W = a0.W, H = a0.H, TS = 16, tw = Math.ceil(W / TS), ta = new Float64Array(tw * Math.ceil(H / TS)),
+          tb = new Float64Array(ta.length), tn = new Uint32Array(ta.length);
+    let n = 0, sig = 0, clip = 0;
     for (let p = 0; p < mask.length; p++) {
       if (!mask[p]) continue;
       n++;
-      sig += Math.max(0, a.lum[p] - dark.lum[p]);
-      diff += Math.abs(a.lum[p] - b.lum[p]);
+      const s = Math.max(0, a.lum[p] - dark.lum[p]);
+      sig += s;
+      const t = ((p / W / TS) | 0) * tw + (((p % W) / TS) | 0);
+      ta[t] += a.lum[p] - dark.lum[p]; tb[t] += b.lum[p] - dark.lum[p]; tn[t]++;
       if (Math.max(a.r[p], a.g[p], a.b[p]) >= 250) clip++;
     }
+    let dsum = 0, ssum = 0;
+    for (let t = 0; t < ta.length; t++) if (tn[t] >= 8) { dsum += Math.abs(ta[t] - tb[t]); ssum += Math.max(1, Math.abs(ta[t])); }
     const signal = n ? sig / n : 0;
-    tried.push({level: L, signal: Math.round(signal), flicker: signal ? Math.round(100 * diff / n / signal) / 100 : 1,
+    tried.push({level: L, signal: Math.round(signal), flicker: ssum ? Math.round(100 * dsum / ssum) / 100 : 1,
                 clipped: n ? Math.round(1000 * clip / n) / 10 : 0});
   }
   const steady = tried.filter(t => t.flicker < 0.08 && t.signal > 20);

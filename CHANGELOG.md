@@ -4,6 +4,14 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.10.2] - 2026-11-05
+
+- The LED level's flicker test compares LED light per 16 x 16 tile instead of pixel by
+  pixel. A hand moving a fraction of a pixel between its two photos changed single pixels a
+  lot (LEDs are tiny dots) and read as flicker, so a drifting phone picked a dimmer level for
+  no reason; flicker (PWM caught by a rolling shutter) swings whole bands of rows, which the
+  tiles still see.
+
 ## [0.10.1] - 2026-11-05
 
 - Fix: every capture stopped at "Choosing the LED level" with "Assignment to constant
