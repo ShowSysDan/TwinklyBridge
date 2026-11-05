@@ -19,3 +19,7 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# local settings and the bridge's saved config (instance/bridge_config.json)
+.env
+instance/

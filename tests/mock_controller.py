@@ -54,12 +54,14 @@ class MockState:
         self.frames = 0
         self.bad = 0
         self.parts = {}
+        self.complete = b""                 # last fully received rt frame
         self.lock = threading.Lock()
 
     @property
     def last_frame(self):
+        """The last complete frame (a frame still arriving fragment by fragment is not it)."""
         with self.lock:
-            return b"".join(self.parts[k] for k in sorted(self.parts))
+            return self.complete or b"".join(self.parts[k] for k in sorted(self.parts))
 
 
 def make_handler(state):
@@ -106,6 +108,7 @@ def make_handler(state):
             if self.path == "/xled/v2/led/rt/frame":
                 with state.lock:
                     state.parts = {0: body}
+                    state.complete = body
                 state.frames += 1
                 return self._send(200, {"result": {"code": 1000}})
             self._send(404, {"result": {"code": 2404}})
@@ -148,6 +151,7 @@ class MockController:
                         self.state.parts = {}
                     self.state.parts[d[11]] = d[12:]
                     if len(self.state.parts) * 900 >= N_LED * 3:
+                        self.state.complete = b"".join(self.state.parts[k] for k in sorted(self.state.parts))
                         self.state.frames += 1
             else:
                 self.state.bad += 1

@@ -74,6 +74,23 @@ def mapped_controllers():
     return ctrls
 
 
+def parameter_summary():
+    """What the mapped controllers cost on the desk, the figures the export will produce.
+    A pixel is one parameter per colour (R, G, B = 3; R, G, B, W = 4), and each parameter
+    takes one DMX address, so `parameters` is also the number of Eos outputs the pixel map
+    patches. Only controllers with a map count, and only as many LEDs as the map covers."""
+    cpu = CONFIG["sacn"]["channels_per_universe"]
+    per, universes = [], set()
+    for c in mapped_controllers():
+        pixels = min(c.n_led, len(c.map))
+        per.append({"id": c.id, "name": c.name, "pixels": pixels, "bpp": c.bpp,
+                    "parameters": pixels * c.bpp, "universes": c.universes(cpu)})
+        universes.update(c.universes(cpu))
+    return {"controllers": len(per), "pixels": sum(p["pixels"] for p in per),
+            "parameters": sum(p["parameters"] for p in per), "universes": len(universes),
+            "per_controller": per}
+
+
 def pixel_rows(params):
     """One row per LED across all mapped controllers.
     params: pixelmap, flatten (xy|xz|zy|unwrap), arrange (shared|tiled|separate), width, max_cells

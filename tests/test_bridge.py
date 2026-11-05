@@ -106,6 +106,11 @@ def test_map_pull_and_exports(bridge, mock):
     cid = client.get("/api/status").get_json()["controllers"][0]["id"]
     r = client.post(f"/api/controllers/{cid}/map/pull").get_json()
     assert r["ok"] and r["points"] == N and r["source"] == "3d"
+    # parameter count: one per colour per mapped pixel
+    assert r["pixels"] == N and r["bpp"] == 3 and r["parameters"] == 3 * N
+    assert r["totals"]["parameters"] == 3 * N and r["totals"]["controllers"] == 1
+    c = client.get("/api/status").get_json()["controllers"][0]
+    assert c["parameters"] == 3 * N
     # add a second, synthetic controller patched after the first (a helix, to exercise unwrap)
     from bridge.twinkly import Controller
     b = Controller({"ip": "10.0.0.2", "name": "C11", "universe": 9, "channel": 1, "n_led": N, "profile": "RGB",
@@ -113,6 +118,14 @@ def test_map_pull_and_exports(bridge, mock):
     b.map = [[0.5 + 0.5 * math.cos(i / 50.0), i / N, 0.5 + 0.5 * math.sin(i / 50.0)] for i in range(N)]
     state.CONTROLLERS[b.id] = b
     try:
+        p = client.get("/api/parameters").get_json()
+        assert (p["controllers"], p["pixels"], p["parameters"], p["universes"]) == (2, 2 * N, 6 * N, 16)
+        assert client.get("/api/status").get_json()["parameters"] == p
+        # an RGBW controller counts four per pixel, and only the LEDs its map covers
+        w = Controller({"ip": "10.0.0.3", "name": "W1", "universe": 20, "n_led": 100, "profile": "RGBW"})
+        w.map = [[i, 0, 0] for i in range(60)]
+        assert w.parameters == 240 and w.to_status()["parameters"] == 240
+        assert Controller({"ip": "10.0.0.4", "n_led": 100}).parameters == 0           # no map yet
         for arrange in ("shared", "tiled", "separate"):
             r = client.get(f"/api/export/eos_pixelmap.csv?arrange={arrange}&flatten=unwrap&pixelmap=3")
             assert r.status_code == 200, r.data

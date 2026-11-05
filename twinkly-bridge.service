@@ -1,0 +1,54 @@
+# Reference systemd unit. install.sh writes a concrete copy of this to
+# /etc/systemd/system/twinkly-bridge.service with the real user, paths, bind address and
+# port filled in. Edit install.sh (or the installed copy), not this file, to change a
+# deployment.
+
+[Unit]
+Description=twinkly-bridge - sACN / DDP to Twinkly Pro real-time bridge
+After=network-online.target
+Wants=network-online.target
+# Never give up restarting: this has to come back on its own during a show.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=twinkly
+WorkingDirectory=/home/twinkly/TwinklyBridge
+EnvironmentFile=/home/twinkly/TwinklyBridge/.env
+# One worker only: the sACN / DDP listeners and the controller sessions live in the process.
+# No control socket: gunicorn would put it in ~/.gunicorn, which the sandbox makes read-only.
+ExecStart=/home/twinkly/TwinklyBridge/venv/bin/gunicorn --workers 1 --threads 8 --timeout 60 --graceful-timeout 10 --no-control-socket \
+    --bind 0.0.0.0:5120 wsgi:app
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TWINKLY_BRIDGE_CONFIG=/home/twinkly/TwinklyBridge/instance/bridge_config.json
+
+# --- sandboxing: the process only needs the network, its own instance/ folder and /dev/log
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/twinkly/TwinklyBridge/instance
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+
+[Install]
+WantedBy=multi-user.target

@@ -1,23 +1,34 @@
-"""Web UI and REST API. `python run.py` or `twinkly-bridge` starts everything."""
+"""Web UI and REST API.
+
+`python run.py` (any OS, Flask's own server) or gunicorn with `wsgi:app` (the systemd
+service written by install.sh) both go through create_app(), which loads .env and the
+config, installs the access controls and starts the receiver / output threads once.
+"""
 import argparse
 import base64
 import csv
 import io
 import os
+import threading
 import time
 
 from flask import Flask, Response, abort, jsonify, render_template, request
 
-from . import state
+from . import __version__, logs, security, state
 from .ddp import DdpReceiver
 from .engine import ControlThread, OutputEngine
 from .exports import eos_patch_csv, eos_pixelmap_csv, preview_svg
-from .layout import auto_patch
+from .layout import auto_patch, parameter_summary
 from .sacn import SacnReceiver
 from .state import CONFIG, CONTROLLERS, lock, save_config, wanted_universes
 from .twinkly import Controller
 
-app = Flask(__name__, template_folder=os.path.join(state.PACKAGE_DIR, "templates"))
+DEFAULT_PORT = 5120
+
+app = Flask(__name__, template_folder=os.path.join(state.PACKAGE_DIR, "templates"),
+            static_folder=os.path.join(state.PACKAGE_DIR, "static"))
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024        # a 3D map CSV for a few thousand LEDs is < 1 MB
+log = logs.get("app")
 RX = SacnReceiver()
 DDP = DdpReceiver()
 OUT = OutputEngine(RX, DDP)
@@ -30,6 +41,10 @@ def load_controllers():
         for cfg in CONFIG["controllers"]:
             c = Controller(cfg)
             CONTROLLERS[c.id] = c
+
+
+def client_ip():
+    return request.remote_addr or "?"
 
 
 def get_ctrl(cid):
@@ -53,16 +68,37 @@ def csv_response(text, filename):
 # ---------------------------------------------------------------- pages / status
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", version=__version__)
+
+
+@app.get("/healthz")
+def healthz():
+    """For monitoring; needs no login. 200 while the web side is up."""
+    with lock:
+        ctrls = list(CONTROLLERS.values())
+    return jsonify({"ok": True, "version": __version__, "sacn_listening": RX.sock is not None,
+                    "controllers": len(ctrls),
+                    "online": sum(1 for c in ctrls if c.status in ("online", "streaming")),
+                    "streaming": sum(1 for c in ctrls if c.status == "streaming")})
+
+
+@app.get("/api/version")
+def api_version():
+    return jsonify({"version": __version__})
+
+
+@app.get("/api/parameters")
+def api_parameters():
+    return jsonify(parameter_summary())
 
 
 @app.get("/api/status")
 def api_status():
     with lock:
         ctrls = [c.to_status() for c in CONTROLLERS.values()]
-    return jsonify({"sacn": RX.status(), "ddp": DDP.status(),
+    return jsonify({"version": __version__, "sacn": RX.status(), "ddp": DDP.status(),
                     "output": {"fps_target": CONFIG["output"]["fps"], "fps_actual": round(OUT.fps_actual, 1)},
-                    "controllers": ctrls,
+                    "controllers": ctrls, "parameters": parameter_summary(),
                     "settings": {"sacn": CONFIG["sacn"], "ddp": CONFIG["ddp"], "output": CONFIG["output"]}})
 
 
@@ -80,6 +116,7 @@ def api_settings():
         for c in CONTROLLERS.values():
             c._slices = None
     save_config()
+    log.info("settings saved by %s: %s", client_ip(), {k: body[k] for k in ("sacn", "ddp", "output") if k in body})
     if restart:
         RX.restart()
     else:
@@ -110,6 +147,8 @@ def api_add_controller():
     with lock:
         CONTROLLERS[c.id] = c
     save_config()
+    log.info("controller %s (%s) added by %s: %s", c.name, c.ip, client_ip(),
+             f"{c.n_led} LEDs {c.profile}" if ok else f"not reachable yet ({c.error})")
     RX.join(wanted_universes())
     return jsonify(c.to_status()), (201 if ok else 202)
 
@@ -135,6 +174,7 @@ def api_edit_controller(cid):
             c.enabled = bool(body["enabled"])
         c._slices = None
     save_config()
+    log.info("controller %s edited by %s: %s", c.name, client_ip(), body)
     RX.join(wanted_universes())
     return jsonify(c.to_status())
 
@@ -147,6 +187,7 @@ def api_delete_controller(cid):
     with lock:
         del CONTROLLERS[cid]
     save_config()
+    log.info("controller %s (%s) removed by %s", c.name, c.ip, client_ip())
     return jsonify(ok=True)
 
 
@@ -165,6 +206,8 @@ def api_auto_patch():
     body = request.get_json(force=True) or {}
     result = auto_patch(body.get("mode", "aligned"), body.get("start_universe", 1), body.get("order", "group"))
     save_config()
+    log.info("auto patch (%s) by %s: %s", body.get("mode", "aligned"), client_ip(),
+             ", ".join(f"{r['name']} u{r['universe']}/{r['channel']}" for r in result))
     RX.join(wanted_universes())
     return jsonify(result)
 
@@ -176,9 +219,13 @@ def api_pull_map(cid):
     try:
         n = c.pull_map()
     except Exception as e:                                   # noqa: BLE001
+        log.warning("map pull from %s (%s) failed: %s: %s", c.name, c.ip, type(e).__name__, e)
         return jsonify(error=f"{type(e).__name__}: {e}"), 502
     save_config()
-    return jsonify(ok=True, points=n, source=c.map_source)
+    log.info("map pulled from %s (%s) by %s: %d points (%s), %d parameters",
+             c.name, c.ip, client_ip(), n, c.map_source, c.parameters)
+    return jsonify(ok=True, points=n, source=c.map_source, pixels=min(n, c.n_led), bpp=c.bpp,
+                   parameters=c.parameters, totals=parameter_summary())
 
 
 @app.post("/api/controllers/<cid>/map/csv")
@@ -191,7 +238,9 @@ def api_csv_map(cid):
     except ValueError as e:
         return jsonify(error=str(e)), 400
     save_config()
-    return jsonify(ok=True, points=n)
+    log.info("map CSV loaded for %s by %s: %d points, %d parameters", c.name, client_ip(), n, c.parameters)
+    return jsonify(ok=True, points=n, pixels=min(n, c.n_led) if c.n_led else n, bpp=c.bpp,
+                   parameters=c.parameters, totals=parameter_summary())
 
 
 @app.delete("/api/controllers/<cid>/map")
@@ -199,6 +248,7 @@ def api_clear_map(cid):
     c = get_ctrl(cid)
     c.map, c.map_source = None, ""
     save_config()
+    log.info("map cleared for %s by %s", c.name, client_ip())
     return jsonify(ok=True)
 
 
@@ -282,27 +332,68 @@ def api_eos_preview():
                         f"<text y='20'>{e}</text></svg>", mimetype="image/svg+xml")
 
 
-# ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- start-up
 def start_threads():
     for t in (RX, DDP, OUT, CTL):
         if not t.is_alive():
             t.start()
 
 
+def load_env():
+    """Read .env next to run.py, if python-dotenv is installed (it is in requirements.txt)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(os.path.join(state.ROOT_DIR, ".env"))
+
+
+_init_lock = threading.Lock()
+_initialised = False
+
+
+def create_app(config_path=None, start=True):
+    """Load .env and the config, install access control, start the threads. Safe to call twice.
+    gunicorn must run ONE worker: the sACN / DDP sockets and the controller sessions live in
+    the process, and a second worker would fight over UDP 5568 and the rt tokens."""
+    global _initialised
+    with _init_lock:
+        if _initialised:
+            return app
+        load_env()
+        logs.setup()
+        if config_path or os.environ.get("TWINKLY_BRIDGE_CONFIG"):
+            state.CONFIG_PATH = config_path or os.environ["TWINKLY_BRIDGE_CONFIG"]
+        state.load_config(state.CONFIG_PATH)
+        load_controllers()
+        warnings = security.init_app(app, os.environ.get("ALLOWED_NETWORKS", ""),
+                                     os.environ.get("PANEL_USER") or "twinkly",
+                                     os.environ.get("PANEL_PASSWORD") or None)
+        log.info("twinkly-bridge %s starting: config %s, %d controllers, sACN UDP %d, DDP UDP %d",
+                 __version__, state.CONFIG_PATH, len(CONTROLLERS), RX.port, DDP.port)
+        for w in warnings:
+            log.warning(w)
+        if start:
+            start_threads()
+        _initialised = True
+    return app
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="sACN / DDP (Eos) to Twinkly Pro real-time bridge")
-    ap.add_argument("--host", default="127.0.0.1", help="web UI bind address (0.0.0.0 for LAN access)")
-    ap.add_argument("--port", type=int, default=5000)
-    ap.add_argument("--config", default=None, help="path to bridge_config.json")
+    ap.add_argument("--host", default=None,
+                    help="web UI bind address (default HOST from .env, else 127.0.0.1; 0.0.0.0 for LAN access)")
+    ap.add_argument("--port", type=int, default=None, help=f"web UI port (default PORT from .env, else {DEFAULT_PORT})")
+    ap.add_argument("--config", default=None, help="path to bridge_config.json (default instance/bridge_config.json)")
     args = ap.parse_args(argv)
-    if args.config:
-        state.CONFIG_PATH = args.config
-    state.load_config(state.CONFIG_PATH)
-    load_controllers()
-    start_threads()
-    print(f"Twinkly bridge: web UI http://{args.host}:{args.port}  sACN UDP {RX.port}  DDP UDP {DDP.port}  "
-          f"config {state.CONFIG_PATH}")
-    app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
+    load_env()
+    host = args.host or os.environ.get("HOST") or "127.0.0.1"
+    port = args.port or int(os.environ.get("PORT") or DEFAULT_PORT)
+    create_app(args.config)
+    log.info("web UI on http://%s:%d", host, port)
+    # No reloader (it would start every thread twice) and no Werkzeug debugger (it offers a
+    # Python console to anyone who can reach the port).
+    app.run(host=host, port=port, threaded=True, use_reloader=False, use_debugger=False)
 
 
 if __name__ == "__main__":

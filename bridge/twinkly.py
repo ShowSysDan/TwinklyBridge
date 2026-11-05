@@ -15,7 +15,10 @@ import time
 import urllib.error
 import urllib.request
 
+from .logs import get
 from .state import CONFIG
+
+log = get("controller")
 
 # Never route LAN calls through a system proxy (Windows reads the IE/registry proxy by default).
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
@@ -49,6 +52,17 @@ def result_code(reply):
 
 
 class Controller:
+    def _fail(self, message):
+        """Mark the controller in error; log it once per distinct message, not every retry."""
+        if message != self.error or self.status != "error":
+            log.warning("%s (%s): %s", self.name, self.ip, message)
+        self.status, self.error = "error", message
+
+    def _ok(self, status):
+        if self.status == "error":
+            log.info("%s (%s) is back: %s", self.name, self.ip, status)
+        self.status, self.error = status, ""
+
     def __init__(self, cfg):
         self.ip = cfg["ip"]                                  # may carry :port for the HTTP side (tests)
         self.host = self.ip.split(":")[0]
@@ -99,6 +113,7 @@ class Controller:
         cpu = CONFIG["sacn"]["channels_per_universe"]
         return {**{k: v for k, v in self.to_config().items() if k != "map"},
                 "bpp": self.bpp, "has_map": bool(self.map), "map_points": len(self.map) if self.map else 0,
+                "parameters": self.parameters,
                 "universes": self.universes(cpu) if self.source == "sacn" else [],
                 "ddp_range": [self.ddp_start, self.ddp_start + self.n_led * self.bpp - 1] if self.source == "ddp" and self.n_led else [],
                 "status": self.status, "error": self.error, "active": self.active,
@@ -108,6 +123,11 @@ class Controller:
     @property
     def bpp(self):
         return 4 if self.profile == "RGBW" else 3
+
+    @property
+    def parameters(self):
+        """Desk parameters this controller's map adds (one per colour per mapped pixel); 0 without a map."""
+        return min(self.n_led, len(self.map)) * self.bpp if self.map and self.n_led else 0
 
     def abs_start(self, cpu):
         return (self.universe - 1) * cpu + (self.channel - 1)
@@ -177,11 +197,11 @@ class Controller:
                     self.prev_mode = {k: m[k] for k in ("mode", "unique_id") if k in m}
             except Exception:                                # noqa: BLE001
                 pass
-            self.status, self.error = "online", ""
+            self._ok("online")
             return True
         except Exception as e:                               # noqa: BLE001
             self.token = None
-            self.status, self.error = "error", f"{type(e).__name__}: {e}"
+            self._fail(f"{type(e).__name__}: {e}")
             return False
 
     def set_mode(self, body):
@@ -200,15 +220,15 @@ class Controller:
             try:
                 self.set_mode({"mode": "rt"})
                 self.rt_asserted_at = now
-                self.status, self.error = "streaming", ""
+                self._ok("streaming")
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     self.token = None
-                self.status, self.error = "error", f"set mode rt: HTTP {e.code}"
+                self._fail(f"set mode rt: HTTP {e.code}")
                 return False
             except Exception as e:                           # noqa: BLE001
                 self.token = None
-                self.status, self.error = "error", f"set mode rt: {e}"
+                self._fail(f"set mode rt: {e}")
                 return False
         return True
 
@@ -227,7 +247,7 @@ class Controller:
                 self.set_mode(self.prev_mode)
             self.status = "online"
         except Exception as e:                               # noqa: BLE001
-            self.status, self.error = "error", f"restore mode: {e}"
+            self._fail(f"restore mode: {e}")
 
     # ---------------------------------------------------------------- map
     def pull_map(self):

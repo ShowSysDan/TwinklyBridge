@@ -2,6 +2,7 @@
 an Eos-importable patch sheet, and an SVG preview of the grid."""
 import csv
 import io
+from html import escape
 
 from .layout import pixel_rows
 
@@ -60,16 +61,19 @@ def preview_svg(params):
            '<rect width="100%" height="100%" fill="#111"/>']
     for mi, pm in enumerate(maps):
         oy = mi * (maxy * cell + 40)
+        mine = [r for r in rows if r["pixelmap"] == pm]
+        params = sum(r["bpp"] for r in mine)
         out.append(f'<text x="8" y="{oy + 16}" fill="#ccc" font-family="sans-serif" font-size="12">'
                    f'Pixel map {pm}: {size["W"]} x {size["H"]} cells, {size["nudged"]} nudged, '
-                   f'{straddle or "no"} straddling universe boundaries</text>')
+                   f'{straddle or "no"} straddling universe boundaries; {len(mine)} pixels, '
+                   f'{params} parameters</text>')
         for r in rows:
             if r["pixelmap"] != pm:
                 continue
             ci = ctrl_ids.setdefault(r["controller"], len(ctrl_ids))
             out.append(f'<rect x="{20 + (r["x"] - 1) * cell}" y="{oy + 24 + (r["y"] - 1) * cell}" '
                        f'width="{cell - 1}" height="{cell - 1}" fill="{PALETTE[ci % len(PALETTE)]}">'
-                       f'<title>{r["controller"]} idx {r["index"]} port {r["port"]} led {r["led"]} '
+                       f'<title>{escape(r["controller"])} idx {r["index"]} port {r["port"]} led {r["led"]} '
                        f'addr {r["address"]} ({r["universe"]}/{r["offset"]}) ddp {r["ddp"]}</title></rect>')
     out.append("</svg>")
     return "\n".join(out)
