@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.5.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.6.0** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.5.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.6.0", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -399,30 +399,36 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
    as soon as a map is in.
 3. **Patch all, new universe each**: every controller gets contiguous universes, 170 pixels
    (510 channels) per universe, ordered by the controllers' group offset when they report one.
-4. **Export for Eos**: pick a flatten mode for 3D maps (front, top, side, or unwrap around the
-   vertical axis, which turns a tree into a rectangle), preview the grid, download the
-   pixel map CSV. On the desk: File → Import → CSV, include Pixel Maps.
+4. **Export for Eos**: Eos pixel maps are flat, so a 3D map is flattened for the export
+   (the bridge keeps the 3D map). 3D maps default to **Unwrap**: the cylinder or cone cut
+   down the back and opened out, front in the middle, width in proportion to the way round
+   and height down, so a tree becomes a rectangle. **Cone, unrolled exactly** opens it into
+   a fan instead (distances along the surface stay true; needs more cells); **Sphere** uses
+   longitude and latitude; front, top and side views are there too. Preview the grid,
+   download the pixel map CSV. On the desk: File → Import → CSV, include Pixel Maps.
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 
 ### Camera mapping (phone)
 
 Maps where every LED is, from a phone's camera, when the controller has no map to pull
-(Twinkly Pro keeps the app's map in the cloud). In the same run it measures each port's
-real string length and checks its colour order.
+(Twinkly Pro keeps the app's map in the cloud): flat pieces from one capture, 3D pieces
+(trees, columns, spheres) from captures all the way round. Each capture also measures every
+port's real string length and checks its colour order.
 
-1. **Open the page on the phone**: `https://<bridge-ip>:5121/map` (the desk UI's *Camera
+1. **Open the page on the phone**: `https://<bridge-ip>:5121` (the desk UI's *Camera
    mapping* panel shows the exact address). The bridge's certificate is self-signed, so the
    first time the phone warns: on iPhone tap *Show Details*, *visit this website*, *Visit
    Website*. Phones only allow a web page to use the camera over HTTPS, which is why this
-   page is on its own port. (Windows: start the bridge with `run.bat --host 0.0.0.0`.)
+   page is on its own port.
 2. **Tick the controllers** to map. Map controllers that share a camera view together: they
    end up in one coordinate space, so the Eos export can lay them out as one map.
-3. **Open the camera** (allow it), frame the whole installation, and hold the phone still:
-   a tripod, or leaned against something. Darken the room if you can.
-4. **Start mapping.** The LEDs flash about 28 patterns (≈15 s for 1,250 LEDs); keep still
-   until it says *Working it out*.
-5. **Check the result**: the photo with a dot on every LED found, coloured by port, and a
+3. **Open the camera** and allow camera and motion access (motion gives the compass and tilt
+   readouts). Frame the whole installation and hold the phone still: a tripod, or leaned
+   against something. Darken the room if you can.
+4. **Capture.** The LEDs flash 28 patterns (about 15 s for 1,250 LEDs); keep still until it
+   says *Working it out*.
+5. **Check the capture**: the photo with a dot on every LED found, coloured by port, and a
    table per port:
 
    | Column | Meaning |
@@ -431,8 +437,57 @@ real string length and checks its colour order.
    | Ends at | the last LED seen: the string's real length. *string ends at LED 200 of 250 configured* means 50 configured LEDs don't exist (or are out of frame) |
    | Colours | what the camera saw when the bridge sent red, green, blue: `RGB` is right; `GRB` (*red sent, green seen*) means those strings take a different colour order |
 
-6. **Save map** stores it as the controller's map (`camera, 1200 seen, 50 filled`); LEDs not
-   seen are filled in along their string. *Try again* repeats without saving.
+6. **Keep this view.** The installation now shows what has been found: **green** in this
+   view, **blue** in earlier views, **red** not found yet.
+7. For a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
+   distance and height, point the phone at the middle of the piece again and *Capture another
+   view*; repeat until little red is left. The angle fills itself in from the phone's compass
+   (heading change since the first view) and can be typed or picked instead. 8 views all
+   round is best (they also correct a compass that is a few degrees out); 4 is the minimum.
+   For a flat piece one view is enough; more views from the front just fill gaps.
+8. **Build map** combines the views: views from about the same direction are fitted onto
+   each other (zoom, turn, shift) and averaged (2D); views from different directions give
+   each LED's 3D position (each LED seen from two directions is placed exactly, one seen
+   from one direction gets its depth from its neighbours). The preview shows the map from
+   the front and from above, coloured along the chain. If it looks mirrored compared with the
+   real object (you walked left), press **Flip**.
+9. **Save map**, then **check it on the installation**: *Left to right*, *Top to bottom*,
+   *Front to back*, *Spin around*, *Ring from centre* and *Rainbow across* run bars and
+   planes placed by the map. On a right map the bar crosses the real object smoothly and
+   straight; stray LEDs show where it is off. The same patterns are in the desk UI's *Test
+   patterns* panel (group *On the map*).
+
+**Obstructed or unseen LEDs** are filled in along their string, assuming the string carries
+on the way it was going: in 3D, round the object (angle, distance from the axis and height
+change smoothly, at the string's own spiral rate either side of the gap) rather than straight
+through it; at a string's end, by continuing its last stretch. The vertical axis comes from
+circles fitted to the LEDs seen at each height, so a hidden side doesn't pull it off centre.
+The live map draws filled-in LEDs as rings, so you can see which positions are guesses.
+
+Views are kept (in `instance/mapping_views.json`) until you discard them, so you can come
+back and add views later; starting with a different set of controllers starts afresh.
+
+Good to know: the 3D model assumes the phone is upright and far enough away that the piece
+isn't distorted by perspective: stand back and zoom in rather than standing close (the page
+warns when the phone tilts more than 15 degrees or moves during a capture). The phone's
+LiDAR isn't available to web pages, only to native apps, so depth comes from the views.
+
+If the phone page doesn't load, work down this list. The desk UI's *Camera mapping* panel
+shows the addresses, where HTTPS is listening, and why it is off if it is:
+
+- **Panel says "HTTPS is off: no certificate"**: run `install.bat` (Windows) or
+  `sudo bash install.sh` (Linux) again after updating, or `python tools/make_cert.py`, then
+  restart the bridge. On Windows the certificate needs Git for Windows' `openssl`.
+- **The phone can open `http://<bridge-ip>:5120` but not `:5121`**: the firewall blocks TCP
+  5121. Add the rule from the install steps above (Windows: `New-NetFirewallRule ...
+  -LocalPort 5121`; Linux: `sudo ufw allow 5121/tcp`).
+- **The phone can't open `http://<bridge-ip>:5120` either**: it isn't on a network that
+  reaches the bridge (guest Wi-Fi, another VLAN), or the bridge was started with
+  `HOST=127.0.0.1`; the HTTPS port listens on every interface regardless.
+- **Safari says it can't establish a secure connection, with no way to continue**: make a
+  fresh certificate (`NEW_CERT=1 sudo bash install.sh`, or `python tools/make_cert.py
+  --force`) and restart; the panel warns when the machine's IP is missing from it.
+- Use the address the panel shows, with the `https://` (typing it without now redirects).
 
 Tips: brightness around 128 is usually right (raise it in a bright room, lower it if LEDs
 bloom into each other); raise *Wait after each pattern* if the phone's camera is slow to
@@ -589,7 +644,7 @@ are set in the web UI and stored in `instance/bridge_config.json`.
 | `SYSLOG_HOST` | *(unset)* | Remote syslog server for every log line |
 | `SYSLOG_PORT` / `SYSLOG_PROTO` / `SYSLOG_FACILITY` | `514` / `udp` / `local0` | Remote syslog details (facility also applies to local syslog) |
 | `HTTPS_PORT` | `5121` | HTTPS port for the phone (camera mapping); `0` = off. The Linux service takes it from `install.sh` |
-| `HTTPS_HOST` | same as `HOST` | Bind address for HTTPS under `run.py` |
+| `HTTPS_HOST` | `0.0.0.0` | Bind address for HTTPS. Every interface by default, even when `HOST` keeps the web UI on `127.0.0.1`, because the phone has to reach it |
 | `TLS_CERT` / `TLS_KEY` | `instance/cert.pem` / `instance/key.pem` | Certificate for HTTPS (made by the installers; replace with one from `mkcert` or your own CA to avoid the warning) |
 | `TWINKLY_BRIDGE_CONFIG` | `instance/bridge_config.json` | Where the bridge saves its config (`--config` on `run.py` overrides it) |
 
@@ -640,8 +695,11 @@ POST /api/mapping/start                  {"ids": [...], "level": 128} -> session
 POST /api/mapping/step                   {"session", "step"}: returns once that frame is out on every controller
 POST /api/mapping/save                   {"session", "points": [[x,y]|null...], "colours": ["RGB"|...], "save": true}
                                           -> per controller found / filled and a per-port report
+POST /api/mapping/view                   {"session", "angle", "points", "colours", "heading", "pitch", "moved"}: keep as a view
+GET  /api/mapping/views                  the kept views; DELETE discards them
+POST /api/mapping/combine                {"mode": "auto"|"flat"|"around", "mirror": false, "save": false}
 POST /api/mapping/stop
-GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap&arrange=shared|tiled|separate
+GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB
 GET  /api/export/eos_patch.csv           same parameters
 GET  /api/export/eos_preview.svg         same parameters

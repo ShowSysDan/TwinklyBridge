@@ -6,20 +6,21 @@ config, installs the access controls and starts the receiver / output threads on
 """
 import argparse
 import base64
+from collections import Counter
 import csv
 import io
 import os
 import threading
 import time
 
-from flask import Flask, Response, abort, jsonify, make_response, render_template, request
+from flask import Flask, Response, abort, jsonify, make_response, redirect, render_template, request
 
 from . import __version__, logs, mapping, security, state, tls
 from .ddp import DdpReceiver
 from .engine import ControlThread, OutputEngine
 from .exports import eos_patch_csv, eos_pixelmap_csv, preview_svg
 from .layout import auto_patch, parameter_summary
-from .patterns import PATTERNS
+from .patterns import MAP_PATTERNS, PATTERNS, bounds
 from .sacn import SacnReceiver
 from .state import CONFIG, CONTROLLERS, lock, save_config, wanted_universes
 from .twinkly import Controller
@@ -80,6 +81,9 @@ def csv_response(text, filename):
 # ---------------------------------------------------------------- pages / status
 @app.get("/")
 def index():
+    # the HTTPS port is the phone's: its bare address goes straight to camera mapping
+    if request.is_secure and not request.args.get("desk"):
+        return redirect("/map")
     return render_template("index.html", version=__version__)
 
 
@@ -92,7 +96,13 @@ def map_page():
 @app.get("/api/mapping/info")
 def api_mapping_info():
     """Where the phone should go: the HTTPS port (0 = no certificate, HTTPS off)."""
-    return jsonify({"https_port": app.config.get("HTTPS_PORT", 0), "host": request.host.rsplit(":", 1)[0],
+    host = request.host.rsplit(":", 1)[0] if not request.host.endswith("]") else request.host
+    lan = tls.lan_addresses()
+    names = tls.STATUS.get("names") or []
+    port = app.config.get("HTTPS_PORT", 0)
+    return jsonify({"https_port": port, "host": host, "https": dict(tls.STATUS), "lan_addresses": lan,
+                    "urls": [f"https://{ip}:{port}/map" for ip in lan] if port else [],
+                    "cert_missing_ips": [ip for ip in lan if names and ip not in names],
                     "session": mapping.SESSION.describe() if mapping.SESSION else None})
 
 
@@ -172,42 +182,154 @@ def api_mapping_stop():
     return jsonify(ok=True)
 
 
-@app.post("/api/mapping/save")
-def api_mapping_save():
-    """body: {"session": id, "points": [[x, y] | null, ...] (one per LED, global order),
-    "colours": ["RGB" | "GRB" | ... | null, ...], "save": true}. Fills gaps along each string,
-    saves each controller's map (unless save is false) and returns a report per port."""
-    body = request.get_json(force=True) or {}
-    s = _session(body)
-    pts, cols = body.get("points") or [], body.get("colours") or []
-    if len(pts) != s.total:
-        return jsonify(error=f"expected {s.total} points, got {len(pts)}"), 400
-    found = sum(1 for p in pts if p)
-    if found < max(3, s.total // 10):
-        return jsonify(error=f"only {found} of {s.total} LEDs were found: nothing saved. Darken the room, "
-                             f"get the whole installation in frame, hold the phone still, and try again"), 422
+def _store_maps(ctrls, offsets, pts, cols, save, source, partial=False):
+    """Split global points (one per LED: [x, y] or [x, y, z] or None) into each controller,
+    report per port, fill gaps along the strings and (if save) store the maps."""
     out = []
-    for c in s.ctrls:
-        o = s.offsets[c.id]
+    for c in ctrls:
+        o = offsets[c.id]
         mine = [p if p and len(p) >= 2 else None for p in pts[o:o + c.n_led]]
-        rep = mapping.report(mine, cols[o:o + c.n_led], c.ports, c.n_led)
+        rep = mapping.report(mine, cols[o:o + c.n_led], c.ports, c.n_led, partial)
         filled, n_filled = mapping.fill_gaps(mine, c.ports, c.n_led)
         n_found = sum(1 for p in mine if p)
-        if body.get("save", True):
-            c.map = [[round(p[0], 5), round(p[1], 5), 0] if p else [0, 0, 0] for p in filled]
-            c.map_source = f"camera, {n_found} seen, {n_filled} filled"
+        if save:
+            c.map = [[round(p[0], 5), round(p[1], 5), round(p[2], 5) if len(p) > 2 else 0] if p else [0, 0, 0]
+                     for p in filled]
+            c.map_source = f"{source}, {n_found} seen, {n_filled} filled"
+            c.map_filled = [i for i, p in enumerate(mine) if not p]
             c.map_error = ""
         out.append({"id": c.id, "name": c.name, "found": n_found, "filled": n_filled,
                     "parameters": c.parameters, "ports": rep})
-    if body.get("save", True):
+    if save:
         save_config()
         with mapping.lock:
-            for c in s.ctrls:
+            for c in ctrls:
                 c.test = None
             mapping.SESSION = None
-        log.info("camera map saved by %s: %s", client_ip(),
+        log.info("camera map (%s) saved by %s: %s", source, client_ip(),
                  "; ".join(f"{r['name']} {r['found']} seen {r['filled']} filled" for r in out))
+    return out
+
+
+def _check_points(pts, total):
+    if len(pts) != total:
+        return f"expected {total} points, got {len(pts)}"
+    found = sum(1 for p in pts if p)
+    if found < max(3, total // 10):
+        return (f"only {found} of {total} LEDs were found: nothing kept. Darken the room, get the "
+                f"installation in frame, hold the phone still, and try again")
+    return None
+
+
+@app.post("/api/mapping/save")
+def api_mapping_save():
+    """One capture straight to a map. body: {"session": id, "points": [[x, y] | null, ...]
+    (one per LED, global order), "colours": ["RGB" | "GRB" | ... | null, ...], "save": true}.
+    Fills gaps along each string, saves each controller's map (unless save is false) and
+    returns a report per port."""
+    body = request.get_json(force=True) or {}
+    s = _session(body)
+    pts, cols = body.get("points") or [], body.get("colours") or []
+    err = _check_points(pts, s.total)
+    if err:
+        return jsonify(error=err), 400 if err.startswith("expected") else 422
+    out = _store_maps(s.ctrls, s.offsets, pts, cols, body.get("save", True), "camera")
     return jsonify(ok=True, controllers=out, totals=parameter_summary())
+
+
+def _views_summary(data):
+    if not data:
+        return None
+    seen = set()
+    for v in data["views"]:
+        seen |= {g for g, p in enumerate(v["points"]) if p}
+    return {"controllers": data["ids"], "total": data["total"], "seen_any": len(seen),
+            "views": [{"angle": v["angle"], "found": sum(1 for p in v["points"] if p), "heading": v.get("heading"),
+                       "pitch": v.get("pitch"), "moved": v.get("moved", False)} for v in data["views"]]}
+
+
+def _union(data):
+    """Per LED: seen in any view (for the port report) and the colour order most views agree on."""
+    total = data["total"]
+    pts, cols = [None] * total, [None] * total
+    for g in range(total):
+        votes = Counter()
+        for v in data["views"]:
+            if v["points"][g]:
+                pts[g] = pts[g] or v["points"][g]
+                if v["colours"] and g < len(v["colours"]) and v["colours"][g]:
+                    votes[v["colours"][g]] += 1
+        cols[g] = votes.most_common(1)[0][0] if votes else None
+    return pts, cols
+
+
+@app.post("/api/mapping/view")
+def api_mapping_view():
+    """Keep a capture as one view for combining. body: {"session", "angle" (degrees, walking
+    to the right around the object), "points", "colours", "heading", "pitch", "moved"}.
+    Shows coverage on the LEDs: green = this view, blue = earlier views only, red = not yet."""
+    body = request.get_json(force=True) or {}
+    s = _session(body)
+    pts = body.get("points") or []
+    err = _check_points(pts, s.total)
+    if err:
+        return jsonify(error=err), 400 if err.startswith("expected") else 422
+    ids = [c.id for c in s.ctrls]
+    data = mapping.load_views()
+    replaced = bool(data) and (data["ids"] != ids or data["total"] != s.total)
+    if not data or replaced:
+        data = {"ids": ids, "total": s.total, "offsets": s.offsets, "views": []}
+    before = set()
+    for v in data["views"]:
+        before |= {g for g, p in enumerate(v["points"]) if p}
+    now = {g for g, p in enumerate(pts) if p}
+    data["views"].append({"angle": float(body.get("angle") or 0), "points": [p[:2] if p else None for p in pts],
+                          "colours": body.get("colours") or [], "heading": body.get("heading"),
+                          "pitch": body.get("pitch"), "moved": bool(body.get("moved")), "time": time.time()})
+    mapping.save_views(data)
+    for c in s.ctrls:
+        c.test = {"frame": s.coverage(c, now, before), "until": time.time() + 600, "pattern": "coverage"}
+    union, cols = _union(data)
+    rep = _store_maps(s.ctrls, s.offsets, union, cols, False, "", partial=True)
+    log.info("mapping view %d at %s deg kept by %s: %d LEDs (%d new)", len(data["views"]), body.get("angle"),
+             client_ip(), len(now), len(now - before))
+    return jsonify(ok=True, replaced=replaced, new=len(now - before), views=_views_summary(data), controllers=rep)
+
+
+@app.get("/api/mapping/views")
+def api_mapping_views():
+    return jsonify(_views_summary(mapping.load_views()))
+
+
+@app.delete("/api/mapping/views")
+def api_mapping_views_clear():
+    mapping.save_views(None)
+    log.info("mapping views discarded by %s", client_ip())
+    return jsonify(ok=True)
+
+
+@app.post("/api/mapping/combine")
+def api_mapping_combine():
+    """Combine the kept views into one map. body: {"mode": "auto"|"flat"|"around",
+    "mirror": false, "save": false}. Returns the preview points (global, x/y/z 0..1), per
+    view fit, how many LEDs were seen from several views, and the port report."""
+    body = request.get_json(force=True) or {}
+    data = mapping.load_views()
+    if not data or not data["views"]:
+        return jsonify(error="no views kept yet: capture one first"), 400
+    with lock:
+        ctrls = [CONTROLLERS.get(i) for i in data["ids"]]
+    if None in ctrls or sum(c.n_led for c in ctrls) != data["total"]:
+        return jsonify(error="the controllers changed since these views were taken: discard them and capture again"), 409
+    try:
+        mode, pts, info, stats = mapping.combine(data["views"], body.get("mode", "auto"), bool(body.get("mirror")))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    _, cols = _union(data)
+    out = _store_maps(ctrls, data["offsets"], pts, cols, bool(body.get("save")),
+                      f"camera {'3D' if mode == 'around' else '2D'}, {len(data['views'])} views")
+    return jsonify(ok=True, mode=mode, views=info, stats=stats, points=pts, controllers=out,
+                   saved=bool(body.get("save")), totals=parameter_summary())
 
 
 @app.get("/healthz")
@@ -416,7 +538,7 @@ def api_csv_map(cid):
 @app.delete("/api/controllers/<cid>/map")
 def api_clear_map(cid):
     c = get_ctrl(cid)
-    c.map, c.map_source = None, ""
+    c.map, c.map_source, c.map_filled = None, "", []
     save_config()
     log.info("map cleared for %s by %s", c.name, client_ip())
     return jsonify(ok=True)
@@ -440,7 +562,9 @@ def api_map():
     with lock:
         for c in CONTROLLERS.values():
             out.append({"id": c.id, "name": c.name, "n_led": c.n_led, "bpp": c.bpp, "ports": c.ports,
-                        "group": c.group, "points": [[p[0], p[1]] for p in (c.map or [])]})
+                        "group": c.group,
+                        "points": [[p[0], p[1], p[2] if len(p) > 2 else 0] for p in (c.map or [])],
+                        "filled": c.map_filled or []})
     return jsonify(out)
 
 
@@ -470,8 +594,12 @@ def start_test(c, body):
         name = body.get("pattern")
         if name not in PATTERNS:
             return f"pattern must be one of {', '.join(PATTERNS)}"
-        c.test = {"pattern": name, "params": {"rgb": rgb, "speed": float(body.get("speed") or 25)},
-                  "start": time.time(), "until": time.time() + secs}
+        if name in MAP_PATTERNS and not c.map:
+            return f"{c.name} has no map yet (pull one, map it with the camera, or Map from ports)"
+        c.test = {"pattern": name, "params": {"rgb": rgb, "speed": float(body.get("speed") or 25),
+                                              "period": float(body.get("period") or 3),
+                                              "bounds": body.get("_bounds")},
+                  "start": body.get("_start") or time.time(), "until": time.time() + secs}
     elif mode == "pixel":
         c.test = {"frame": c.pixel_frame(int(body.get("index", 0)), rgb), "until": time.time() + secs}
     elif mode == "solid":
@@ -490,6 +618,8 @@ def api_test_all():
     with lock:
         ids = body.get("ids") or [c.id for c in CONTROLLERS.values() if c.enabled]
         ctrls = [CONTROLLERS[i] for i in ids if i in CONTROLLERS]
+    # map patterns: one box and one clock for every controller, so a sweep crosses them as one
+    body = {**{k: v for k, v in body.items() if not k.startswith("_")}, "_bounds": bounds(ctrls), "_start": time.time()}
     errors = {c.id: e for c in ctrls if (e := start_test(c, body))}
     if body.get("mode") in ("pattern", "solid"):
         log.info("test %s %s on %s by %s", body.get("mode"), body.get("pattern", ""),
@@ -503,7 +633,7 @@ def api_test(cid):
     """body: {"mode": "pattern"|"pixel"|"solid"|"off"|"stop", "pattern": "chase", "index": 0,
     "rgb": [r,g,b], "speed": 25, "seconds": 3}"""
     c = get_ctrl(cid)
-    body = request.get_json(force=True) or {}
+    body = {k: v for k, v in (request.get_json(force=True) or {}).items() if not k.startswith("_")}
     err = start_test(c, body)
     if err:
         return jsonify(error=err), (400 if "must be" in err else 502)
@@ -559,7 +689,7 @@ _init_lock = threading.Lock()
 _initialised = False
 
 
-def create_app(config_path=None, start=True, https_host=None):
+def create_app(config_path=None, start=True):
     """Load .env and the config, install access control, start the threads. Safe to call twice.
     gunicorn must run ONE worker: the sACN / DDP sockets and the controller sessions live in
     the process, and a second worker would fight over UDP 5568 and the rt tokens."""
@@ -582,8 +712,10 @@ def create_app(config_path=None, start=True, https_host=None):
             log.warning(w)
         if start:
             start_threads()
-            https_host = os.environ.get("HTTPS_HOST") or https_host or os.environ.get("HOST") or "0.0.0.0"
-            app.config["HTTPS_PORT"] = tls.start(app, https_host, int(os.environ.get("HTTPS_PORT", "5121") or 0))
+            # every interface unless HTTPS_HOST says otherwise: it only exists for a phone on the LAN,
+            # so following HOST=127.0.0.1 (the run.py default) would make it unreachable
+            app.config["HTTPS_PORT"] = tls.start(app, os.environ.get("HTTPS_HOST") or "0.0.0.0",
+                                                  int(os.environ.get("HTTPS_PORT", "5121") or 0))
         _initialised = True
     return app
 
@@ -598,7 +730,7 @@ def main(argv=None):
     load_env()
     host = args.host or os.environ.get("HOST") or "127.0.0.1"
     port = args.port or int(os.environ.get("PORT") or DEFAULT_PORT)
-    create_app(args.config, https_host=host)
+    create_app(args.config)
     log.info("web UI on http://%s:%d", host, port)
     # No reloader (it would start every thread twice) and no Werkzeug debugger (it offers a
     # Python console to anyone who can reach the port).

@@ -46,6 +46,7 @@
         <p class="hint wide" id="tDesc"></p>
         <label for="tColour">Colour (solid, chase head, pixel)</label><input type="color" id="tColour" value="#ffffff">
         <label for="tSpeed">Speed (LEDs per second)</label><input type="number" id="tSpeed" value="25" min="1" max="2000">
+        <label for="tPeriod">Sweep time (s, map patterns)</label><input type="number" id="tPeriod" value="3" min="0.2" max="60" step="0.5">
         <label for="tSecs">Run for (s)</label><input type="number" id="tSecs" value="60" min="1" max="3600">
         <div class="wide"><button id="tStart" class="primary">Start pattern</button> <button id="tStop">Stop all tests</button> <span class="hint" id="tMsg"></span></div>
       </div>
@@ -93,6 +94,8 @@
     <div class="maptools">
       <span>Live map, lit with the frames going out right now. Click an LED to flash it.</span>
       <label><input type="checkbox" id="shared"> Draw all controllers in one space (join groups)</label>
+      <span id="rotHint" hidden>3D map: drag to turn, double-click to reset.</span>
+      <span class="hint">Rings: positions filled in, not seen by the camera.</span>
       <span class="pick" id="pick"></span>
     </div>
     <div class="empty" id="mapEmpty">No maps yet. Use <em>Pull map</em> on a controller to fetch its camera layout, or upload a CSV from tools/twinkly_layout.py.</div>
@@ -109,7 +112,9 @@
           <option value="xy">Front view (x across, y down)</option>
           <option value="xz">Top view (x across, z down)</option>
           <option value="zy">Side view (z across, y down)</option>
-          <option value="unwrap">Unwrap around the vertical axis (trees, columns)</option>
+          <option value="unwrap">Unwrap: cylinder / cone opened at the back (trees, columns)</option>
+          <option value="cone">Cone, unrolled exactly (fan shape, no stretching)</option>
+          <option value="sphere">Sphere: longitude across, latitude down (balls)</option>
         </select>
         <label for="eArr">Several controllers</label>
         <select id="eArr">

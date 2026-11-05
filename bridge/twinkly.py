@@ -111,6 +111,7 @@ class Controller:
         self.mac = cfg.get("mac", "")
         self.map = cfg.get("map")                            # [[x, y, z], ...] or None
         self.map_source = cfg.get("map_source", "")
+        self.map_filled = cfg.get("map_filled", [])         # LEDs whose position was guessed, not seen
         # runtime
         self.map_error = ""                                  # why the last Pull map failed
         self.token = None
@@ -136,11 +137,12 @@ class Controller:
                 "ddp_start": self.ddp_start, "input_order": self.input_order,
                 "n_led": self.n_led, "profile": self.profile, "ports": self.ports, "group": self.group,
                 "product": self.product, "fw": self.fw, "mac": self.mac,
-                "map": self.map, "map_source": self.map_source}
+                "map": self.map, "map_source": self.map_source, "map_filled": self.map_filled}
 
     def to_status(self):
         cpu = CONFIG["sacn"]["channels_per_universe"]
-        return {**{k: v for k, v in self.to_config().items() if k != "map"},
+        return {**{k: v for k, v in self.to_config().items() if k not in ("map", "map_filled")},
+                "map_filled_count": len(self.map_filled or []),
                 "bpp": self.bpp, "has_map": bool(self.map), "map_points": len(self.map) if self.map else 0,
                 "parameters": self.parameters,
                 "universes": self.universes(cpu) if self.source == "sacn" else [],
@@ -319,6 +321,7 @@ class Controller:
             raise RuntimeError(f"layout returned code {result_code(layout)}")
         coords = layout.get("coordinates", [])
         self.map = [[c.get("x", 0), c.get("y", 0), c.get("z", 0)] for c in coords]
+        self.map_filled = []
         self.map_source = f"{layout.get('source', '?')}{' synthesized' if layout.get('synthesized') else ''}"
         return len(self.map)
 
@@ -336,6 +339,7 @@ class Controller:
                     pts[first + k] = [k, row, 0]
         self.map = [p or [0, len(ports), 0] for p in pts]
         self.map_source = "ports"
+        self.map_filled = []
         return len(self.map)
 
     def probe(self):
@@ -383,6 +387,7 @@ class Controller:
         n = max(pts) + 1
         self.map = [pts.get(i, [0, 0, 0]) for i in range(n)]
         self.map_source = "csv"
+        self.map_filled = []
         return n
 
     # ---------------------------------------------------------------- frames

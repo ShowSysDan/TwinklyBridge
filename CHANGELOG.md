@@ -4,6 +4,56 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.6.0] - 2026-11-05
+
+- **3D camera mapping from several views.** Each capture can be kept as a view with the
+  angle it was taken from (walking round the object to the right). *Build map* fits views
+  from one direction onto each other (zoom, turn, shift) and averages them, or, for views
+  from round the object, works out every LED's 3D position: LEDs seen from two directions
+  are placed exactly, LEDs seen from one get depth from their neighbours; each view's zoom
+  and offset are fitted and typed angles corrected (best with 8 views). Preview from the
+  front and from above, *Flip* for a mirrored result, then save. Views are kept in
+  `instance/mapping_views.json` so more can be added later. Tested on a sphere (1% of its
+  size with 4 views at true angles) and a tree with LEDs hidden in every view.
+- **The phone's compass fills in each view's angle** (heading change since the first view);
+  tilt and movement are read from the motion sensors and warned about. (LiDAR isn't
+  available to web pages.)
+- **Coverage on the LEDs between captures**: green = found in this view, blue = found
+  before, red = not found yet, to see where to capture next.
+- **Smarter gap filling** for obstructed / unseen LEDs, along each string: in 3D, round the
+  object (angle, radius, height) at the string's own spiral rate rather than straight
+  through it; at a string's end, continuing its last stretch. The vertical axis is found by
+  circles fitted per height band (cones and trees narrow upwards), so a hidden side doesn't
+  pull it off centre. Filled-in LEDs are remembered and drawn as rings on the live map.
+- **Check patterns placed by the map**: `sweep_x`, `sweep_y`, `sweep_z` (bars), `ring`,
+  `spin` (a plane round the vertical axis) and `map_rainbow`, with a sweep time; on the phone
+  after saving and in the desk Test patterns panel. Several controllers share one box and one
+  clock, so a bar crosses them as one piece.
+- **Eos export of 3D maps**: Eos pixel maps are flat, so 3D maps default to *Unwrap*: the
+  cylinder / cone cut down the back and opened out, front in the middle, width in proportion
+  to the way round, height down. New: *Cone, unrolled exactly* (a fan; distances along the
+  surface stay true; apex found from how the radius narrows) and *Sphere*.
+- The desk live map shows 3D maps in 3D: drag to turn, double-click to reset.
+- The phone page's bare address (`https://<bridge>:5121`) opens camera mapping; while more
+  views are to come, the port report says "not seen yet" instead of "string ends".
+
+## [0.5.1] - 2026-11-05
+
+Fixes for the phone page not loading:
+
+- **Plain `http://` on the HTTPS port is redirected** to `https://` (301). Safari tries
+  plain HTTP when the address is typed without `https://`, and the bridge used to drop
+  those connections, so the page "didn't load".
+- **HTTPS listens on every interface by default.** Under `run.py` / `run.bat` it followed
+  `HOST`, and the `.env` that install.bat creates sets `HOST=127.0.0.1`, so the phone could
+  not reach it unless the bridge was started with `--host 0.0.0.0`. `HTTPS_HOST` still
+  overrides.
+- The desk UI's *Camera mapping* panel shows what is going on: the exact addresses to open,
+  where HTTPS is listening, why it is off (e.g. no certificate), and whether the certificate
+  is missing one of this machine's IPs. The start-up log prints the phone address(es).
+- Tests for the HTTPS listener: TLS, the redirect, stalled connections, a missing
+  certificate.
+
 ## [0.5.0] - 2026-11-05
 
 - **Camera mapping from a phone** (`https://<bridge>:5121/map`). The bridge lights every
