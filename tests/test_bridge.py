@@ -167,6 +167,31 @@ def test_map_pull_and_exports(bridge, mock):
         del state.CONTROLLERS[b.id]
 
 
+def test_map_pull_404_explains(bridge, mock):
+    client, appmod, state = bridge
+    cid = client.get("/api/status").get_json()["controllers"][0]["id"]
+    mock.state.no_layout = True
+    try:
+        r = client.post(f"/api/controllers/{cid}/map/pull")
+        assert r.status_code == 502
+        err = r.get_json()["error"]
+        assert "/xled/v2/led/layout/full -> 404" in err and "/xled/v1/led/layout/full -> 404" in err
+        assert "camera-mapped" in err
+        assert client.get("/api/status").get_json()["controllers"][0]["map_error"] == err.split("Pull map failed: ")[1]
+    finally:
+        mock.state.no_layout = False
+    assert client.post(f"/api/controllers/{cid}/map/pull").get_json()["ok"]
+    assert client.get("/api/status").get_json()["controllers"][0]["map_error"] == ""
+
+
+def test_bridge_404_is_json(bridge):
+    client, appmod, state = bridge
+    r = client.post("/api/controllers/nope/map/pull")
+    assert r.status_code == 404 and "no controller 'nope'" in r.get_json()["error"]
+    r = client.get("/api/nothing")
+    assert r.status_code == 404 and r.get_json()["error"].startswith("bridge:")
+
+
 # ---------------------------------------------------------------- auto patch
 def test_auto_patch(bridge, mock):
     client, appmod, state = bridge

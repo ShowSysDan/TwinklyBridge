@@ -27,9 +27,28 @@ RT_PORT = 7777
 FRAGMENT = 900
 
 
+class NotFound(urllib.error.HTTPError):
+    """Every path tried answered 404. `attempts` is [(url, reply body snippet), ...]."""
+
+    def __init__(self, attempts):
+        self.attempts = attempts
+        super().__init__(attempts[-1][0], 404, "Not Found", None, None)
+
+    def __str__(self):
+        return "; ".join(f"GET {url} -> 404{f' {body}' if body else ''}" for url, body in self.attempts)
+
+
+def _snippet(err):
+    try:
+        return err.read(300).decode("utf-8", "replace").strip()
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
 def api_call(ip, paths, body=None, token=None, raw=None, timeout=5):
-    """Try each path in order (v2 first, then v1). Returns (json, path). A 404 falls through."""
-    last = None
+    """Try each path in order (v2 first, then v1). Returns (json, path). A 404 falls through to
+    the next path; if every path is 404, raises NotFound naming each URL and the reply."""
+    attempts = []
     for p in paths:
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
         req = urllib.request.Request(
@@ -41,10 +60,10 @@ def api_call(ip, paths, body=None, token=None, raw=None, timeout=5):
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.load(r), p
         except urllib.error.HTTPError as e:
-            last = e
             if e.code != 404:
                 raise
-    raise last
+            attempts.append((f"http://{ip}{p}", _snippet(e)))
+    raise NotFound(attempts)
 
 
 def result_code(reply):
@@ -84,6 +103,7 @@ class Controller:
         self.map = cfg.get("map")                            # [[x, y, z], ...] or None
         self.map_source = cfg.get("map_source", "")
         # runtime
+        self.map_error = ""                                  # why the last Pull map failed
         self.token = None
         self.raw_token = b""
         self.api = "v2"
@@ -116,7 +136,7 @@ class Controller:
                 "parameters": self.parameters,
                 "universes": self.universes(cpu) if self.source == "sacn" else [],
                 "ddp_range": [self.ddp_start, self.ddp_start + self.n_led * self.bpp - 1] if self.source == "ddp" and self.n_led else [],
-                "status": self.status, "error": self.error, "active": self.active,
+                "status": self.status, "error": self.error, "active": self.active, "map_error": self.map_error,
                 "frames_sent": self.frames_sent, "api": self.api, "prev_mode": self.prev_mode,
                 "testing": self.testing(time.time())}
 
@@ -252,9 +272,28 @@ class Controller:
     # ---------------------------------------------------------------- map
     def pull_map(self):
         if not self.token and not self.connect():
-            raise RuntimeError(self.error)
-        layout, _ = api_call(self.ip, ["/xled/v2/led/layout/full", "/xled/v1/led/layout/full"],
-                             token=self.token, timeout=15)
+            raise RuntimeError(f"cannot log in to {self.ip}: {self.error}")
+        try:
+            layout, _ = api_call(self.ip, ["/xled/v2/led/layout/full", "/xled/v1/led/layout/full"],
+                                 token=self.token, timeout=15)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:                                # token expired: log in again, once
+                self.token = None
+                if not self.connect():
+                    raise RuntimeError(f"cannot log in to {self.ip}: {self.error}") from e
+                layout, _ = api_call(self.ip, ["/xled/v2/led/layout/full", "/xled/v1/led/layout/full"],
+                                     token=self.token, timeout=15)
+            elif isinstance(e, NotFound):
+                grp = self.group or {}
+                in_group = grp.get("mode") not in (None, "", "none")
+                raise RuntimeError(
+                    f"{self.name} ({self.ip}, {self.product or 'unknown model'} fw {self.fw or '?'}) has no "
+                    f"layout to give: {e}. Usually the controller has never been camera-mapped: map it "
+                    f"in the Twinkly app, then Pull map again, or use Upload CSV."
+                    + (f" It is in a group (mode {grp.get('mode')}); try Pull map on the group's master."
+                       if in_group else "")) from e
+            else:
+                raise
         if result_code(layout) != 1000:
             raise RuntimeError(f"layout returned code {result_code(layout)}")
         coords = layout.get("coordinates", [])
