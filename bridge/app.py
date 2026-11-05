@@ -1,0 +1,309 @@
+"""Web UI and REST API. `python run.py` or `twinkly-bridge` starts everything."""
+import argparse
+import base64
+import csv
+import io
+import os
+import time
+
+from flask import Flask, Response, abort, jsonify, render_template, request
+
+from . import state
+from .ddp import DdpReceiver
+from .engine import ControlThread, OutputEngine
+from .exports import eos_patch_csv, eos_pixelmap_csv, preview_svg
+from .layout import auto_patch
+from .sacn import SacnReceiver
+from .state import CONFIG, CONTROLLERS, lock, save_config, wanted_universes
+from .twinkly import Controller
+
+app = Flask(__name__, template_folder=os.path.join(state.PACKAGE_DIR, "templates"))
+RX = SacnReceiver()
+DDP = DdpReceiver()
+OUT = OutputEngine(RX, DDP)
+CTL = ControlThread()
+
+
+def load_controllers():
+    with lock:
+        CONTROLLERS.clear()
+        for cfg in CONFIG["controllers"]:
+            c = Controller(cfg)
+            CONTROLLERS[c.id] = c
+
+
+def get_ctrl(cid):
+    c = CONTROLLERS.get(cid)
+    if not c:
+        abort(404, "no such controller")
+    return c
+
+
+def export_params():
+    p = {k: request.args.get(k, "") for k in
+         ("pixelmap", "flatten", "arrange", "width", "max_cells", "mode", "channel_base",
+          "manufacturer", "fixture_type", "allow_straddle")}
+    return p
+
+
+def csv_response(text, filename):
+    return Response(text, mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+# ---------------------------------------------------------------- pages / status
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+@app.get("/api/status")
+def api_status():
+    with lock:
+        ctrls = [c.to_status() for c in CONTROLLERS.values()]
+    return jsonify({"sacn": RX.status(), "ddp": DDP.status(),
+                    "output": {"fps_target": CONFIG["output"]["fps"], "fps_actual": round(OUT.fps_actual, 1)},
+                    "controllers": ctrls,
+                    "settings": {"sacn": CONFIG["sacn"], "ddp": CONFIG["ddp"], "output": CONFIG["output"]}})
+
+
+@app.post("/api/settings")
+def api_settings():
+    body = request.get_json(force=True) or {}
+    restart = False
+    with lock:
+        for section in ("sacn", "ddp", "output"):
+            for k, v in body.get(section, {}).items():
+                if k in CONFIG[section]:
+                    if section == "sacn" and k in ("interface_ip", "multicast") and CONFIG[section][k] != v:
+                        restart = True
+                    CONFIG[section][k] = type(CONFIG[section][k])(v)
+        for c in CONTROLLERS.values():
+            c._slices = None
+    save_config()
+    if restart:
+        RX.restart()
+    else:
+        RX.join(wanted_universes())
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- controllers
+@app.get("/api/controllers")
+def api_controllers():
+    with lock:
+        return jsonify([c.to_status() for c in CONTROLLERS.values()])
+
+
+@app.post("/api/controllers")
+def api_add_controller():
+    body = request.get_json(force=True) or {}
+    ip = (body.get("ip") or "").strip()
+    if not ip:
+        return jsonify(error="ip is required"), 400
+    c = Controller({"ip": ip, "universe": body.get("universe", 1), "channel": body.get("channel", 1),
+                    "name": body.get("name", ""), "source": body.get("source", "sacn"),
+                    "ddp_start": body.get("ddp_start", 1)})
+    with lock:
+        if c.id in CONTROLLERS:
+            return jsonify(error=f"{ip} is already added"), 409
+    ok = c.connect()
+    with lock:
+        CONTROLLERS[c.id] = c
+    save_config()
+    RX.join(wanted_universes())
+    return jsonify(c.to_status()), (201 if ok else 202)
+
+
+@app.put("/api/controllers/<cid>")
+def api_edit_controller(cid):
+    c = get_ctrl(cid)
+    body = request.get_json(force=True) or {}
+    with lock:
+        if "name" in body:
+            c.name = body["name"] or c.name
+        if "source" in body and body["source"] in ("sacn", "ddp"):
+            c.source = body["source"]
+        if "universe" in body:
+            c.universe = max(1, int(body["universe"]))
+        if "channel" in body:
+            c.channel = min(512, max(1, int(body["channel"])))
+        if "ddp_start" in body:
+            c.ddp_start = max(1, int(body["ddp_start"]))
+        if "input_order" in body and sorted(body["input_order"]) == ["B", "G", "R", "W"]:
+            c.input_order = body["input_order"]
+        if "enabled" in body:
+            c.enabled = bool(body["enabled"])
+        c._slices = None
+    save_config()
+    RX.join(wanted_universes())
+    return jsonify(c.to_status())
+
+
+@app.delete("/api/controllers/<cid>")
+def api_delete_controller(cid):
+    c = get_ctrl(cid)
+    if c.active:
+        c.restore_mode()
+    with lock:
+        del CONTROLLERS[cid]
+    save_config()
+    return jsonify(ok=True)
+
+
+@app.post("/api/controllers/<cid>/connect")
+def api_connect(cid):
+    c = get_ctrl(cid)
+    c.connect()
+    save_config()
+    RX.join(wanted_universes())
+    return jsonify(c.to_status())
+
+
+@app.post("/api/patch/auto")
+def api_auto_patch():
+    """body: {"mode": "aligned"|"packed", "start_universe": 1, "order": "group"|"added"}"""
+    body = request.get_json(force=True) or {}
+    result = auto_patch(body.get("mode", "aligned"), body.get("start_universe", 1), body.get("order", "group"))
+    save_config()
+    RX.join(wanted_universes())
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------- maps
+@app.post("/api/controllers/<cid>/map/pull")
+def api_pull_map(cid):
+    c = get_ctrl(cid)
+    try:
+        n = c.pull_map()
+    except Exception as e:                                   # noqa: BLE001
+        return jsonify(error=f"{type(e).__name__}: {e}"), 502
+    save_config()
+    return jsonify(ok=True, points=n, source=c.map_source)
+
+
+@app.post("/api/controllers/<cid>/map/csv")
+def api_csv_map(cid):
+    c = get_ctrl(cid)
+    f = request.files.get("file")
+    text = f.read().decode("utf-8", "replace") if f else (request.get_data(as_text=True) or "")
+    try:
+        n = c.set_map_from_csv(text)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    save_config()
+    return jsonify(ok=True, points=n)
+
+
+@app.delete("/api/controllers/<cid>/map")
+def api_clear_map(cid):
+    c = get_ctrl(cid)
+    c.map, c.map_source = None, ""
+    save_config()
+    return jsonify(ok=True)
+
+
+@app.get("/api/controllers/<cid>/map.csv")
+def api_map_csv(cid):
+    c = get_ctrl(cid)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["index", "port", "led", "x", "y", "z"])
+    for i, p in enumerate(c.map or []):
+        port, led = c.port_of(i)
+        w.writerow([i, port, led, *p])
+    return csv_response(buf.getvalue(), f"{c.name}_layout.csv")
+
+
+@app.get("/api/map")
+def api_map():
+    out = []
+    with lock:
+        for c in CONTROLLERS.values():
+            out.append({"id": c.id, "name": c.name, "n_led": c.n_led, "bpp": c.bpp, "ports": c.ports,
+                        "group": c.group, "points": [[p[0], p[1]] for p in (c.map or [])]})
+    return jsonify(out)
+
+
+@app.get("/api/frames")
+def api_frames():
+    with lock:
+        out = {c.id: base64.b64encode(c.last_frame).decode() for c in CONTROLLERS.values() if c.last_frame}
+    return jsonify(out)
+
+
+# ---------------------------------------------------------------- tests
+@app.post("/api/controllers/<cid>/test")
+def api_test(cid):
+    """body: {"mode": "pixel"|"solid"|"off"|"stop", "index": 0, "rgb": [r,g,b], "seconds": 3}"""
+    c = get_ctrl(cid)
+    body = request.get_json(force=True) or {}
+    mode = body.get("mode", "stop")
+    secs = float(body.get("seconds", 3))
+    rgb = [max(0, min(255, int(v))) for v in (body.get("rgb") or [255, 255, 255])[:3]]
+    if not c.n_led and not c.connect():
+        return jsonify(error=c.error), 502
+    if mode == "stop":
+        c.test = None
+    elif mode == "pixel":
+        c.test = {"frame": c.pixel_frame(int(body.get("index", 0)), rgb), "until": time.time() + secs}
+    elif mode == "solid":
+        c.test = {"frame": c.solid_frame(rgb), "until": time.time() + secs}
+    elif mode == "off":
+        c.test = {"frame": bytes(c.n_led * c.bpp), "until": time.time() + secs}
+    else:
+        return jsonify(error="mode must be pixel, solid, off or stop"), 400
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- exports
+@app.get("/api/export/eos_pixelmap.csv")
+def api_eos_pixelmap():
+    try:
+        text, size, straddle = eos_pixelmap_csv(export_params())
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return csv_response(text, "eos_pixelmap.csv")
+
+
+@app.get("/api/export/eos_patch.csv")
+def api_eos_patch():
+    try:
+        return csv_response(eos_patch_csv(export_params()), "eos_patch.csv")
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.get("/api/export/eos_preview.svg")
+def api_eos_preview():
+    try:
+        return Response(preview_svg(export_params()), mimetype="image/svg+xml")
+    except ValueError as e:
+        return Response(f"<svg xmlns='http://www.w3.org/2000/svg' width='400' height='40'>"
+                        f"<text y='20'>{e}</text></svg>", mimetype="image/svg+xml")
+
+
+# ---------------------------------------------------------------- main
+def start_threads():
+    for t in (RX, DDP, OUT, CTL):
+        if not t.is_alive():
+            t.start()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="sACN / DDP (Eos) to Twinkly Pro real-time bridge")
+    ap.add_argument("--host", default="127.0.0.1", help="web UI bind address (0.0.0.0 for LAN access)")
+    ap.add_argument("--port", type=int, default=5000)
+    ap.add_argument("--config", default=None, help="path to bridge_config.json")
+    args = ap.parse_args(argv)
+    if args.config:
+        state.CONFIG_PATH = args.config
+    state.load_config(state.CONFIG_PATH)
+    load_controllers()
+    start_threads()
+    print(f"Twinkly bridge: web UI http://{args.host}:{args.port}  sACN UDP {RX.port}  DDP UDP {DDP.port}  "
+          f"config {state.CONFIG_PATH}")
+    app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
+
+
+if __name__ == "__main__":
+    main()

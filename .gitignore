@@ -1,0 +1,21 @@
+# runtime state
+bridge_config.json
+bridge_config.json.tmp
+*.pcap
+*.pcapng
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

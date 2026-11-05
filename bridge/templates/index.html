@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twinkly bridge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #141820; --panel: #1b2029; --panel-2: #222935; --line: #2c3442;
+    --text: #e6e9ef; --muted: #8c95a6; --amber: #f2b33d; --blue: #4fa3ff;
+    --green: #6cc281; --red: #e0655b;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.45; font-variant-numeric: tabular-nums;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  input[type=text], input[type=number], select {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; min-width: 0;
+  }
+  input[type=number] { width: 5.5em; }
+  input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  button {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #0b1220; font-weight: 500; }
+  button.quiet { background: transparent; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  header {
+    display: flex; align-items: center; gap: 28px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .lamp { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--line); margin-right: 8px; vertical-align: -1px; }
+  .lamp.on { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  .lamp.ok { background: var(--green); }
+  .lamp.bad { background: var(--red); }
+  .stat { color: var(--muted); }
+  .stat strong { color: var(--text); font-weight: 500; }
+
+  main { display: grid; grid-template-columns: 380px 1fr; min-height: calc(100% - 60px); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  aside { border-right: 1px solid var(--line); padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 26px; }
+  @media (max-width: 900px) { aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+
+  .ctrl { background: var(--panel); border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; }
+  .ctrl .top { display: flex; align-items: baseline; gap: 10px; }
+  .ctrl .top .name { font-weight: 600; font-size: 15px; }
+  .ctrl .top .ip { color: var(--muted); }
+  .ctrl .top .state { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .ctrl .facts { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+  .ctrl .patch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ctrl .patch label { color: var(--muted); font-size: 13px; }
+  .ctrl .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .ctrl .err { color: var(--red); font-size: 13px; margin-top: 6px; word-break: break-word; }
+  .ctrl.off { opacity: .6; }
+
+  form.add { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: end; }
+  form.add label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+  form.add input[type=text] { width: 100%; }
+
+  .settings { display: grid; grid-template-columns: 1fr auto; gap: 8px 14px; align-items: center; }
+  .settings label { color: var(--muted); }
+  .settings .wide { grid-column: 1 / -1; }
+
+  section.map { padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .maptools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--muted); }
+  .maptools .pick { margin-left: auto; color: var(--text); }
+  canvas { width: 100%; height: auto; display: block; background: #0f1218; border-radius: 6px; cursor: crosshair; }
+  .empty { padding: 60px 20px; color: var(--muted); text-align: center; border: 1px dashed var(--line); border-radius: 6px; }
+  .eos { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .eosgrid { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; max-width: 640px; }
+  .eosgrid label { color: var(--muted); }
+  .eosgrid .wide { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel-2);
+           border: 1px solid var(--line); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Twinkly bridge</h1>
+  <span class="stat"><span class="lamp" id="rxLamp"></span><span id="rxText">waiting for sACN</span></span>
+  <span class="stat" id="uniText"></span>
+  <span class="stat" id="ddpText"></span>
+  <span class="stat">output <strong id="fpsText">0</strong> fps</span>
+</header>
+
+<main>
+  <aside>
+    <div>
+      <h2>Controllers</h2>
+      <p class="hint">Each controller takes its LEDs from sACN (universe and start channel) or DDP (start byte), in chain order. Edit a number to repatch, or patch all of them at once.</p>
+      <div id="ctrls"></div>
+      <div class="actions" style="margin-bottom:14px">
+        <button id="patchAligned" title="Each controller starts on a fresh universe; the normal choice for Eos">Patch all, new universe each</button>
+        <button id="patchPacked" title="Back to back with no gaps">Patch all, packed</button>
+      </div>
+      <form class="add" id="addForm">
+        <div><label>IP address</label><input type="text" id="addIp" placeholder="10.201.115.204" required></div>
+        <div><label>Universe</label><input type="number" id="addU" value="1" min="1" max="63999"></div>
+        <div><label>Channel</label><input type="number" id="addC" value="1" min="1" max="512"></div>
+        <button class="primary" type="submit">Add controller</button>
+      </form>
+      <p class="hint" id="addMsg"></p>
+    </div>
+
+    <div>
+      <h2>sACN input</h2>
+      <div class="settings">
+        <label for="sIface">Listen on interface</label><input type="text" id="sIface" placeholder="0.0.0.0" style="width:9em">
+        <label for="sMc">Join multicast groups</label><input type="checkbox" id="sMc">
+        <label for="sCpu">Channels per universe</label><input type="number" id="sCpu" min="1" max="512">
+        <label for="sIdle">Stop after no data for (s)</label><input type="number" id="sIdle" min="0.5" step="0.5">
+        <label for="sDdp">Also listen for DDP on UDP 4048</label><input type="checkbox" id="sDdp">
+      </div>
+      <p class="hint" style="margin-top:8px">On a PC with several adapters, set the interface to the IP that faces the console. If Eos is on another VLAN, untick multicast and set its sACN output to unicast to this PC.</p>
+    </div>
+
+    <div>
+      <h2>Output</h2>
+      <div class="settings">
+        <label for="oFps">Frames per second</label><input type="number" id="oFps" min="1" max="60">
+        <label for="oGap">Pause between fragments (ms)</label><input type="number" id="oGap" min="0" max="20" step="0.5">
+        <label for="oRe">Re-assert rt mode every (s)</label><input type="number" id="oRe" min="5" max="600">
+        <label for="oRestore">Restore previous mode when idle</label><input type="checkbox" id="oRestore">
+        <div class="wide"><button id="saveSettings">Save settings</button> <span class="hint" id="setMsg"></span></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="map">
+    <div class="maptools">
+      <span>Live map, lit with the frames going out right now. Click an LED to flash it.</span>
+      <label><input type="checkbox" id="shared"> Draw all controllers in one space (join groups)</label>
+      <span class="pick" id="pick"></span>
+    </div>
+    <div class="empty" id="mapEmpty">No maps yet. Use <em>Pull map</em> on a controller to fetch its camera layout, or upload a CSV from tools/twinkly_layout.py.</div>
+    <canvas id="map" width="1600" height="900" hidden></canvas>
+
+    <div class="eos">
+      <h2>Export for Eos</h2>
+      <p class="hint">Builds an Eos Pixel Map CSV from the maps above and the patch in the left column, so what the console sends is exactly what the bridge expects. 3D maps are flattened first. Import on the desk with File, Import, CSV, Pixel Maps.</p>
+      <div class="eosgrid">
+        <label for="ePm">Pixel map number</label><input type="number" id="ePm" value="1" min="1">
+        <label for="eFlat">Flatten</label>
+        <select id="eFlat">
+          <option value="xy">Front view (x across, y down)</option>
+          <option value="xz">Top view (x across, z down)</option>
+          <option value="zy">Side view (z across, y down)</option>
+          <option value="unwrap">Unwrap around the vertical axis (trees, columns)</option>
+        </select>
+        <label for="eArr">Several controllers</label>
+        <select id="eArr">
+          <option value="shared">One map, shared coordinates (join group)</option>
+          <option value="tiled">One map, side by side</option>
+          <option value="separate">One pixel map per controller</option>
+        </select>
+        <label for="eWidth">Grid width in cells</label><input type="number" id="eWidth" value="0" min="0" max="1000" title="0 = automatic">
+        <label for="eMode">Link pixels by</label>
+        <select id="eMode">
+          <option value="address">Address and fixture profile</option>
+          <option value="channel">Channel (already patched in Eos)</option>
+        </select>
+        <label for="eMfr">Manufacturer / type</label>
+        <span><input type="text" id="eMfr" value="Generic" style="width:7em"> <input type="text" id="eType" placeholder="RGB (from profile)" style="width:9em"></span>
+        <label for="eBase">First channel</label><input type="number" id="eBase" value="1" min="1">
+        <span class="wide">
+          <button id="eosPreview">Preview grid</button>
+          <button id="eosMap" class="primary">Download pixel map CSV</button>
+          <button id="eosPatch">Download patch sheet CSV</button>
+          <span class="hint" id="eosMsg"></span>
+        </span>
+      </div>
+      <p class="hint">Eos counts 512 addresses per universe; keep "channels per universe" at 510 so no pixel straddles a boundary. The patch sheet lists channel, absolute address, port/offset and DDP byte per LED, for Eos's patch import or for checking against the desk.</p>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let status = null, maps = [], frames = {}, hit = [];      // hit: [{cid,index,x,y}] for click lookup
+let toastT = null;
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600);
+}
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && j.error) throw new Error(j.error);
+  return j;
+}
+
+// ---------------------------------------------------------------- status + controllers
+function portOf(c, i) {
+  for (const [pid, first, n] of c.ports || []) if (i >= first && i < first + n) return [pid, i - first + 1];
+  return [-1, i + 1];
+}
+function renderControllers() {
+  const host = $('#ctrls'); host.innerHTML = '';
+  if (!status.controllers.length) { host.innerHTML = '<p class="hint">No controllers yet. Add one by IP below.</p>'; return; }
+  for (const c of status.controllers) {
+    const el = document.createElement('div'); el.className = 'ctrl' + (c.enabled ? '' : ' off');
+    const lamp = c.status === 'streaming' ? 'on' : c.status === 'online' ? 'ok' : c.status === 'error' ? 'bad' : '';
+    const state = c.testing ? 'test pattern' : c.status === 'streaming' ? 'streaming' : c.status;
+    const uni = c.source === 'ddp'
+      ? (c.ddp_range.length ? `DDP bytes ${c.ddp_range[0]} to ${c.ddp_range[1]}` : 'DDP')
+      : (c.universes.length ? (c.universes.length === 1 ? `universe ${c.universes[0]}` : `universes ${c.universes[0]} to ${c.universes[c.universes.length-1]}`) : '');
+    el.innerHTML = `
+      <div class="top"><span class="name">${esc(c.name)}</span><span class="ip">${c.ip}</span>
+        <span class="state"><span class="lamp ${lamp}"></span>${state}</span></div>
+      <div class="facts">${c.n_led ? `${c.n_led} LEDs, ${c.profile}` : 'not read yet'}${c.product ? `, ${esc(c.product)}` : ''}${c.fw ? ` fw ${esc(c.fw)}` : ''}${c.api ? ` (api ${c.api})` : ''}
+        ${c.group && c.group.mode && c.group.mode !== 'none' ? `, group ${esc(c.group.mode)} offset ${c.group.offset}` : ''}
+        <br>${uni}${c.has_map ? `, map ${c.map_points} points (${esc(c.map_source)})` : ', no map'}</div>
+      <div class="patch">
+        <select data-k="source" title="Input protocol"><option value="sacn" ${c.source==='sacn'?'selected':''}>sACN</option><option value="ddp" ${c.source==='ddp'?'selected':''}>DDP</option></select>
+        ${c.source === 'ddp'
+          ? `<label>Start byte</label><input type="number" min="1" value="${c.ddp_start}" data-k="ddp_start">`
+          : `<label>Universe</label><input type="number" min="1" max="63999" value="${c.universe}" data-k="universe">
+             <label>Channel</label><input type="number" min="1" max="512" value="${c.channel}" data-k="channel">`}
+        ${c.profile === 'RGBW' ? `<label>W arrives as</label><select data-k="input_order">${['RGBW','WRGB','GRBW'].map(o => `<option ${o===c.input_order?'selected':''}>${o}</option>`).join('')}</select>` : ''}
+        <label><input type="checkbox" data-k="enabled" ${c.enabled ? 'checked' : ''}> enabled</label>
+      </div>
+      <div class="actions">
+        <button data-a="pull">Pull map</button>
+        <button data-a="csv">Upload CSV</button>
+        ${c.has_map ? `<button data-a="dl">Download CSV</button>` : ''}
+        <button data-a="solid">Flash red</button>
+        <button data-a="off">Blackout 3 s</button>
+        <button data-a="connect">Reconnect</button>
+        <button data-a="remove" class="quiet">Remove</button>
+        <input type="file" accept=".csv,text/csv" hidden data-a="csvfile">
+      </div>
+      ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}`;
+    el.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('change', async () => {
+      const k = inp.dataset.k, v = inp.type === 'checkbox' ? inp.checked : inp.value;
+      try { await api(`/api/controllers/${c.id}`, {method: 'PUT', body: JSON.stringify({[k]: v})}); toast('Patched'); refresh(); }
+      catch (e) { toast(e.message); }
+    }));
+    el.querySelector('[data-a=pull]').onclick = async b => {
+      b.target.disabled = true;
+      try { const r = await api(`/api/controllers/${c.id}/map/pull`, {method: 'POST'}); toast(`Pulled ${r.points} points (${r.source})`); await loadMaps(); }
+      catch (e) { toast(e.message); } refresh();
+    };
+    const file = el.querySelector('[data-a=csvfile]');
+    el.querySelector('[data-a=csv]').onclick = () => file.click();
+    file.onchange = async () => {
+      const fd = new FormData(); fd.append('file', file.files[0]);
+      try { const r = await (await fetch(`/api/controllers/${c.id}/map/csv`, {method: 'POST', body: fd})).json();
+            if (r.error) throw new Error(r.error); toast(`Loaded ${r.points} points`); await loadMaps(); }
+      catch (e) { toast(e.message); } refresh();
+    };
+    const dl = el.querySelector('[data-a=dl]'); if (dl) dl.onclick = () => { location.href = `/api/controllers/${c.id}/map.csv`; };
+    el.querySelector('[data-a=solid]').onclick = () => test(c.id, {mode: 'solid', rgb: [255, 0, 0], seconds: 3});
+    el.querySelector('[data-a=off]').onclick = () => test(c.id, {mode: 'off', seconds: 3});
+    el.querySelector('[data-a=connect]').onclick = async () => { await api(`/api/controllers/${c.id}/connect`, {method: 'POST'}); refresh(); };
+    el.querySelector('[data-a=remove]').onclick = async () => {
+      if (!confirm(`Remove ${c.name} (${c.ip}) from the bridge?`)) return;
+      await api(`/api/controllers/${c.id}`, {method: 'DELETE'}); await loadMaps(); refresh();
+    };
+    host.appendChild(el);
+  }
+}
+async function test(cid, body) {
+  try { await api(`/api/controllers/${cid}/test`, {method: 'POST', body: JSON.stringify(body)}); }
+  catch (e) { toast(e.message); }
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])); }
+
+let settingsLoaded = false;
+async function refresh() {
+  try { status = await api('/api/status'); } catch { return; }
+  const rx = status.sacn, live = rx.active_universes.length > 0;
+  $('#rxLamp').className = 'lamp ' + (live ? 'on' : rx.listening ? '' : 'bad');
+  $('#rxText').textContent = rx.error ? rx.error
+    : live ? `receiving ${rx.rate} packets/s${rx.sources.length ? ' from ' + rx.sources.join(', ') : ''}`
+    : rx.listening ? `listening on UDP 5568${rx.multicast ? ', multicast joined: ' + (rx.joined.length ? rx.joined.join(' ') : 'none yet') : ', unicast'}` : 'not listening';
+  $('#uniText').textContent = live ? `universes ${rx.active_universes.join(' ')}` : '';
+  const dd = status.ddp;
+  $('#ddpText').textContent = dd.error ? `DDP: ${dd.error}` : dd.active ? `DDP ${dd.rate} packets/s` : dd.enabled ? 'DDP listening on 4048' : 'DDP off';
+  $('#fpsText').textContent = status.output.fps_actual;
+  if (document.activeElement && document.activeElement.closest('#ctrls')) return;   // don't clobber an edit in progress
+  renderControllers();
+  if (!settingsLoaded) {
+    const s = status.settings;
+    $('#sIface').value = s.sacn.interface_ip; $('#sMc').checked = s.sacn.multicast;
+    $('#sCpu').value = s.sacn.channels_per_universe; $('#sIdle').value = s.sacn.idle_timeout_s; $('#sDdp').checked = s.ddp.enabled;
+    $('#oFps').value = s.output.fps; $('#oGap').value = s.output.fragment_gap_ms;
+    $('#oRe').value = s.output.rt_reassert_s; $('#oRestore').checked = s.output.restore_mode_on_idle;
+    settingsLoaded = true;
+  }
+}
+async function autoPatch(mode) {
+  try { const r = await api('/api/patch/auto', {method: 'POST', body: JSON.stringify({mode, start_universe: 1, order: 'group'})});
+        toast(`Patched ${r.length} controllers (${mode})`); refresh(); }
+  catch (e) { toast(e.message); }
+}
+$('#patchAligned').onclick = () => autoPatch('aligned');
+$('#patchPacked').onclick = () => autoPatch('packed');
+
+$('#addForm').onsubmit = async e => {
+  e.preventDefault(); $('#addMsg').textContent = 'connecting';
+  try {
+    const r = await api('/api/controllers', {method: 'POST', body: JSON.stringify({ip: $('#addIp').value, universe: +$('#addU').value, channel: +$('#addC').value})});
+    $('#addMsg').textContent = r.status === 'error' ? `Added, but could not connect: ${r.error}` : `Added ${r.name}: ${r.n_led} LEDs`;
+    $('#addIp').value = '';
+  } catch (err) { $('#addMsg').textContent = err.message; }
+  refresh();
+};
+$('#saveSettings').onclick = async () => {
+  try {
+    await api('/api/settings', {method: 'POST', body: JSON.stringify({
+      sacn: {interface_ip: $('#sIface').value || '0.0.0.0', multicast: $('#sMc').checked, channels_per_universe: +$('#sCpu').value, idle_timeout_s: +$('#sIdle').value},
+      ddp: {enabled: $('#sDdp').checked},
+      output: {fps: +$('#oFps').value, fragment_gap_ms: +$('#oGap').value, rt_reassert_s: +$('#oRe').value, restore_mode_on_idle: $('#oRestore').checked}})});
+    $('#setMsg').textContent = 'Saved'; setTimeout(() => $('#setMsg').textContent = '', 2000);
+  } catch (e) { $('#setMsg').textContent = e.message; }
+};
+
+// ---------------------------------------------------------------- live map
+const canvas = $('#map'), ctx = canvas.getContext('2d');
+async function loadMaps() { maps = (await api('/api/map')).filter(m => m.points.length); }
+function layoutTiles() {
+  const W = canvas.width, H = canvas.height, pad = 40;
+  if (!maps.length) return [];
+  if ($('#shared').checked) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const m of maps) for (const [x, y] of m.points) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return maps.map(m => ({m, x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad, x0, x1, y0, y1, label: ''}));
+  }
+  const cols = Math.ceil(Math.sqrt(maps.length)), rows = Math.ceil(maps.length / cols);
+  const tw = (W - pad) / cols, th = (H - pad) / rows;
+  return maps.map((m, i) => {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of m.points) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return {m, x: pad / 2 + (i % cols) * tw + 10, y: pad / 2 + Math.floor(i / cols) * th + 26, w: tw - 20, h: th - 40, x0, x1, y0, y1, label: m.name};
+  });
+}
+function draw() {
+  if (!maps.length) { canvas.hidden = true; $('#mapEmpty').hidden = false; return; }
+  canvas.hidden = false; $('#mapEmpty').hidden = true;
+  ctx.fillStyle = '#0f1218'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  hit = [];
+  for (const t of layoutTiles()) {
+    const m = t.m, sx = t.w / ((t.x1 - t.x0) || 1), sy = t.h / ((t.y1 - t.y0) || 1), s = Math.min(sx, sy);
+    const ox = t.x + (t.w - (t.x1 - t.x0) * s) / 2, oy = t.y + (t.h - (t.y1 - t.y0) * s) / 2;
+    const r = Math.max(1.5, Math.min(4, s * 0.004 * 2 + 1));
+    if (t.label) { ctx.fillStyle = '#8c95a6'; ctx.font = '13px "IBM Plex Sans", system-ui'; ctx.fillText(t.label, t.x, t.y - 10); }
+    const f = frames[m.id] ? Uint8Array.from(atob(frames[m.id]), ch => ch.charCodeAt(0)) : null;
+    m.points.forEach(([x, y], i) => {
+      const px = ox + (x - t.x0) * s, py = oy + (y - t.y0) * s;      // Twinkly y grows downward, same as canvas
+      let col = '#2c3442';
+      if (f) {
+        const o = i * m.bpp;
+        let R = 0, G = 0, B = 0;
+        if (m.bpp === 4) { const w = f[o] || 0; R = Math.min(255, (f[o+1]||0) + w); G = Math.min(255, (f[o+2]||0) + w); B = Math.min(255, (f[o+3]||0) + w); }
+        else { R = f[o] || 0; G = f[o+1] || 0; B = f[o+2] || 0; }
+        if (R + G + B > 0) col = `rgb(${R},${G},${B})`;
+      }
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      hit.push({cid: m.id, c: m, index: i, x: px, y: py});
+    });
+  }
+}
+canvas.addEventListener('click', ev => {
+  const rect = canvas.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * canvas.width / rect.width, y = (ev.clientY - rect.top) * canvas.height / rect.height;
+  let best = null, bd = 12 * 12;
+  for (const h of hit) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
+  if (!best) return;
+  const [port, led] = portOf(best.c, best.index);
+  $('#pick').textContent = `${best.c.name}: index ${best.index}, port ${port}, LED ${led}`;
+  test(best.cid, {mode: 'pixel', index: best.index, rgb: [255, 255, 255], seconds: 3});
+});
+$('#shared').onchange = draw;
+async function pollFrames() {
+  if (maps.length && !document.hidden) { try { frames = await api('/api/frames'); } catch {} draw(); }
+  setTimeout(pollFrames, 100);
+}
+
+// ---------------------------------------------------------------- Eos export
+function eosQuery() {
+  const q = new URLSearchParams({pixelmap: $('#ePm').value, flatten: $('#eFlat').value, arrange: $('#eArr').value,
+    width: $('#eWidth').value, mode: $('#eMode').value, channel_base: $('#eBase').value,
+    manufacturer: $('#eMfr').value, fixture_type: $('#eType').value});
+  return q.toString();
+}
+async function eosDownload(path) {
+  const r = await fetch(path + (path.includes('?') ? '' : '?') + eosQuery());
+  if (!r.ok) { const j = await r.json().catch(() => ({})); $('#eosMsg').textContent = j.error || `error ${r.status}`; return; }
+  const blob = await r.blob(), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = path.split('/').pop().split('?')[0]; a.click(); URL.revokeObjectURL(a.href);
+  $('#eosMsg').textContent = 'Downloaded';
+}
+$('#eosMap').onclick = () => eosDownload('/api/export/eos_pixelmap.csv');
+$('#eosPatch').onclick = () => eosDownload('/api/export/eos_patch.csv');
+$('#eosPreview').onclick = () => window.open('/api/export/eos_preview.svg?' + eosQuery(), '_blank');
+
+refresh(); setInterval(refresh, 1000);
+loadMaps().then(() => { draw(); pollFrames(); });
+</script>
+</body>
+</html>
