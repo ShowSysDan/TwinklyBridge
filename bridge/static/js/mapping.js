@@ -185,7 +185,7 @@ async function aimLook() {
     }
     cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
-    let lit = 0, clipped = 0, edge = 0;
+    let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
     const mx = Math.max(2, Math.round(W * 0.02)), my = Math.max(2, Math.round(H * 0.02));
     const amp = new Int16Array(N);
     for (let p = 0; p < N; p++) {
@@ -196,13 +196,18 @@ async function aimLook() {
       if (clip) clipped++;
       const x = p % W, y = (p / W) | 0;
       if (x < mx || y < my || x >= W - mx || y >= H - my) edge++;
+      if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
       img.data[4 * p] = clip ? 255 : 0; img.data[4 * p + 1] = clip ? 40 : 255; img.data[4 * p + 2] = 60;
       img.data[4 * p + 3] = 170;
     }
     ctx.putImageData(img, 0, 0);
+    if (bx1 >= 0) {                                    // the edges of the lights: a box round them
+      ctx.strokeStyle = 'rgba(255, 200, 0, 0.9)'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(bx0 - 2, by0 - 2, bx1 - bx0 + 4, by1 - by0 + 4);
+    }
     const share = lit ? Math.round(100 * clipped / lit) : 0;
     const aimMsg = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
-      : `LEDs seen (green), ${share}% of them clipped (red).` +
+      : `LEDs seen (green, inside the yellow box), ${share}% of them clipped (red).` +
         (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
         (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
     $('#aimInfo').innerHTML = aimMsg;
@@ -312,17 +317,21 @@ async function chooseLevel(sessionId, settle) {
   await sleep(settle);
   const dark = await grab(2, true);
   const tried = [];
-  let mask = null;
+  let mask = null, L = null;
   for (const L of LEVELS) {
     await api('/api/mapping/step', {session: sessionId, step: 'white', level: L});
     await sleep(settle);
-    const a = await grab(1, true);
+    const a0 = await grab(1, true);
     await sleep(70);
-    const b = await grab(1, true);
+    const b0 = await grab(1, true);
     if (!mask) {                                         // where the LEDs are, from full brightness
-      mask = new Uint8Array(a.lum.length);
-      for (let p = 0; p < mask.length; p++) mask[p] = a.lum[p] - dark.lum[p] > 25 ? 1 : 0;
+      mask = new Uint8Array(a0.lum.length);
+      for (let p = 0; p < mask.length; p++) mask[p] = a0.lum[p] - dark.lum[p] > 25 ? 1 : 0;
+      L = MapDecode.lights(a0.lum, dark.lum, a0.W, a0.H);
     }
+    // line both photos up with the first one, so a drifting hand doesn't look like flicker
+    const a = {lum: MapDecode.alignedLum(a0.lum, a0.W, a0.H, L), r: a0.r, g: a0.g, b: a0.b};
+    const b = {lum: MapDecode.alignedLum(b0.lum, b0.W, b0.H, L)};
     let n = 0, sig = 0, diff = 0, clip = 0;
     for (let p = 0; p < mask.length; p++) {
       if (!mask[p]) continue;
@@ -419,7 +428,7 @@ async function captureView(ids, angle, reuse) {
     log.locked = await lockCamera(shots.white);
     await sleep(150);
     const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
-    let prev = shots.white;
+    let prev = shots.white, prevAligned = shots.white.lum, L = null;
     for (let i = 0; i < order.length; i++) {
       if (cancelled) throw new Error('Stopped.');
       const step = order[i];
@@ -429,30 +438,42 @@ async function captureView(ids, angle, reuse) {
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
       let shot = await grab(step === 'black' ? 4 : 2, colour);
       // a photo that hardly differs from the last one was taken before the LEDs changed
-      // (camera lag): wait and take it again
+      // (camera lag): wait and take it again. Compared lined up with the all-on photo, so a
+      // drifting hand doesn't make a stale photo look new.
       if (shots.black && step !== 'black') {
-        for (let tries = 0; tries < 4 && MapDecode.change(shot.lum, prev.lum, shots.white.lum, shots.black.lum) < 0.12; tries++) {
+        L = L || MapDecode.lights(shots.white.lum, shots.black.lum, shots.white.W, shots.white.H);
+        const same = s => MapDecode.change(MapDecode.alignedLum(s.lum, s.W, s.H, L), prevAligned, shots.white.lum, shots.black.lum) < 0.12;
+        for (let tries = 0; tries < 4 && same(shot); tries++) {
           log.retakes[step] = tries + 1;
           await sleep(settle / 2);
           shot = await grab(2, colour);
         }
-        if (MapDecode.change(shot.lum, prev.lum, shots.white.lum, shots.black.lum) < 0.12)
+        if (same(shot))
           throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
       }
       shots[step] = prev = shot;
+      prevAligned = shots.black && L ? MapDecode.alignedLum(shot.lum, shot.W, shot.H, L) : shot.lum;
     }
+    progress(order.length + 1, order.length + 1, 'Steadying the photos ...');
+    await sleep(30);
+    // line every photo up with the all-on one: hand-held drift is undone before decoding
+    const st = MapDecode.stabilise(shots);
+    log.stabilise = {drift: st.drift, unaligned: st.unaligned, shifts: st.shifts, box: st.box};
     progress(order.length + 1, order.length + 1, 'Working it out ...');
     await sleep(30);
-    const W = shots.black.W, H = shots.black.H, bits = [];
-    for (let k = 0; k < session.bits; k++) bits.push([shots['b' + k].lum, shots['i' + k].lum]);
-    decoded = MapDecode.decode({W, H, black: shots.black.lum, white: shots.white.lum, whiteEnd: shots.white_end.lum, bits,
-                                colour: {black: shots.black, red: shots.red, green: shots.green, blue: shots.blue}},
+    const A = st.shots, W = A.black.W, H = A.black.H, bits = [];
+    for (let k = 0; k < session.bits; k++) bits.push([A['b' + k].lum, A['i' + k].lum]);
+    decoded = MapDecode.decode({W, H, black: A.black.lum, white: A.white.lum, whiteEnd: A.white_end.lum, bits,
+                                colour: {black: A.black, red: A.red, green: A.green, blue: A.blue}},
                                session.total);
     decoded.photo = shots.white;
-    decoded.shots = shots;
+    decoded.shots = shots;                     // the photos as taken (sent to the bridge)
     decoded.log = log;
-    decoded.meta = {...atStart, endHeading: sensor.heading, maxRot: Math.round(sensor.maxRot),
-                    moved: decoded.stats.cameraMoved || sensor.maxRot > 25};
+    // "moved" only when lining up couldn't fix it: the start and end all-on photos still
+    // disagree after lining up (the phone turned rather than drifted), or several photos
+    // couldn't be lined up at all. The motion sensor alone no longer decides.
+    decoded.meta = {...atStart, endHeading: sensor.heading, maxRot: Math.round(sensor.maxRot), drift: st.drift,
+                    moved: decoded.stats.cameraMoved || st.unaligned.length > 4};
     await api('/api/mapping/step', {session: session.session, step: 'white'}).catch(() => {});
     lastReport = await api('/api/mapping/save', {session: session.session, points: decoded.points,
                                                  colours: decoded.colours, save: false}).catch(e => ({error: e.message}));
@@ -518,7 +539,8 @@ function showResult() {
   const s = decoded.stats;
   $('#resultTitle').textContent = `Found ${s.found} of ${s.total} LEDs at ${decoded.meta.angle}°`;
   $('#resultSummary').innerHTML = [
-    decoded.meta.moved ? '<strong class="bad">The phone seems to have moved during the capture: try again with it held still.</strong>' : '',
+    decoded.meta.moved ? '<strong class="bad">The phone moved more than can be corrected (it turned, or photos couldn\'t be lined up): try again holding it still.</strong>' : '',
+    decoded.meta.drift >= 1 ? `The phone drifted up to ${decoded.meta.drift} px during the capture; the photos were lined up again.` : '',
     decoded.meta.pitch !== null && Math.abs(decoded.meta.pitch) > 15 ? `<strong class="bad">The phone was tilted ${Math.round(decoded.meta.pitch)}&deg;: for 3D, hold it upright.</strong>` : '',
     s.found < s.total * 0.5 ? '<strong class="bad">Less than half found: darken the room, get everything in frame, raise the brightness.</strong>' : '',
     'Each string runs red &rarr; yellow &rarr; green &rarr; blue &rarr; violet from its first LED: a right string is one smooth rainbow; a dot in the wrong colour is a misread LED.',

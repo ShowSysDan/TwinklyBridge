@@ -4,6 +4,26 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.10.0] - 2026-11-05
+
+- **Stabilising: hand-held drift is corrected instead of failing the capture.** The all-on
+  photo shows where the lights are; every other photo lights a subset of the same LEDs, so
+  sliding it until its lit pixels land on the all-on photo's gives how far the phone drifted
+  (quarter-size search, then +-4 px at full size, then a fraction of a pixel). Each photo is
+  shifted back before decoding. Tested: photos drifting up to 12 px each find all 1,200 LEDs
+  within 0.13 px (none without stabilising); a phone drifting smoothly by 15 px during a real
+  capture in the browser found all 1,250.
+- **"Phone moved" only when it can't be corrected**: the start and end all-on photos still
+  disagree after lining up (the phone turned, not just drifted), or more than four photos
+  couldn't be lined up. The motion sensor alone no longer decides. The result says how far
+  the phone drifted when it was corrected.
+- Lining up is also used where photos are compared during a capture: the stale-photo check
+  (a drifting hand could make a stale photo look new) and the LED level's flicker test (drift
+  looked like flicker and pushed the level down for no reason).
+- **The edges of the lights** are shown on the live aim view as a yellow box around
+  everywhere the LEDs show up.
+- Per-photo drift is in the capture notes (`log.stabilise` in capture.json).
+
 ## [0.9.2] - 2026-11-05
 
 Guided walk-around fixes ("hardly any LEDs found", camera view disappearing):

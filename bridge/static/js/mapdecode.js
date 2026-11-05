@@ -125,7 +125,137 @@
     return s ? d / s : 1;
   }
 
-  const api = {decode, grayDecode, change};
+  // ---------------------------------------------------------------- stabilising
+  // A hand-held phone drifts a few pixels over the ~25 photos of a capture. Every coding photo
+  // lights a subset of the LEDs lit in the all-on photo, so sliding a photo until its lit
+  // pixels land on the all-on photo's lit pixels gives the drift; shifting it back lines it
+  // up. Coarse search on a quarter-size picture, then +-4 px at full size, then a parabola
+  // through the scores for the fraction of a pixel. Only pixels where LEDs are (from all-on
+  // minus all-off) are summed, which also makes it fast.
+
+  function quarter(a, W, H) {
+    const w = W >> 2, h = H >> 2, o = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let dy = 0; dy < 4; dy++) { const r = (4 * y + dy) * W + 4 * x; s += a[r] + a[r + 1] + a[r + 2] + a[r + 3]; }
+      o[y * w + x] = s / 16;
+    }
+    return {d: o, w, h};
+  }
+
+  // Where the lights are: pixel lists (full size and quarter size, thinned to `max`) and the
+  // bounding box of the LED area (the prop's edges in the picture).
+  function lights(white, black, W, H, T = 30, max = 12000) {
+    const all = [];
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let p = 0; p < W * H; p++) {
+      if (white[p] - black[p] < T) continue;
+      all.push(p);
+      const x = p % W, y = (p / W) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    const step = Math.max(1, Math.ceil(all.length / max));
+    const pts = all.filter((_, i) => i % step === 0);
+    const seen = new Set(), ptsQ = [];
+    const w = W >> 2;
+    for (const p of all) { const q = ((p / W / 4) | 0) * w + ((p % W) >> 2); if (!seen.has(q)) { seen.add(q); ptsQ.push(q); } }
+    return {pts, ptsQ, count: all.length, box: x1 < 0 ? null : [x0, y0, x1, y1]};
+  }
+
+  // Drift of `img` against the all-on reference: {dx, dy, z}. z: how far the best score stands
+  // out from the other candidates (in standard deviations); below ~4 the photo has too little
+  // in it to tell (e.g. the all-off photo).
+  function shiftOf(img, W, H, L, maxShift = 48) {
+    const q = quarter(img, W, H), m = Math.ceil(maxShift / 4), scores = [];
+    let best = -Infinity, bx = 0, by = 0;
+    for (let dy = -m; dy <= m; dy++) for (let dx = -m; dx <= m; dx++) {
+      let s = 0;
+      for (const p of L.ptsQ) {
+        const x = p % q.w + dx, y = ((p / q.w) | 0) + dy;
+        if (x >= 0 && y >= 0 && x < q.w && y < q.h) s += q.d[y * q.w + x];
+      }
+      scores.push(s);
+      if (s > best) { best = s; bx = dx; by = dy; }
+    }
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const sd = Math.sqrt(scores.reduce((a, b) => a + (b - mean) ** 2, 0) / scores.length) || 1;
+    const z = (best - mean) / sd;
+    // refine at full size
+    const fine = (dx, dy) => {
+      let s = 0;
+      for (const p of L.pts) {
+        const x = p % W + dx, y = ((p / W) | 0) + dy;
+        if (x >= 0 && y >= 0 && x < W && y < H) s += img[y * W + x];
+      }
+      return s;
+    };
+    let fb = -Infinity, fx = 4 * bx, fy = 4 * by;
+    const cx = 4 * bx, cy = 4 * by;
+    for (let dy = cy - 4; dy <= cy + 4; dy++) for (let dx = cx - 4; dx <= cx + 4; dx++) {
+      const s = fine(dx, dy);
+      if (s > fb) { fb = s; fx = dx; fy = dy; }
+    }
+    const para = (a, b, c) => { const d = a - 2 * b + c; return d < 0 ? Math.max(-0.5, Math.min(0.5, (a - c) / (2 * d))) : 0; };
+    const sx = para(fine(fx - 1, fy), fb, fine(fx + 1, fy)), sy = para(fine(fx, fy - 1), fb, fine(fx, fy + 1));
+    return {dx: fx + sx, dy: fy + sy, z: Math.round(z * 10) / 10};
+  }
+
+  // `a` sampled at (x + dx, y + dy): undoes a drift of (dx, dy). Bilinear; outside -> 0.
+  function shifted(a, W, H, dx, dy) {
+    const o = new Uint8ClampedArray(W * H), ix = Math.floor(dx), iy = Math.floor(dy), fx = dx - ix, fy = dy - iy;
+    for (let y = 0; y < H; y++) {
+      const y0 = y + iy, y1 = y0 + 1;
+      if (y0 < 0 || y1 >= H) continue;
+      for (let x = 0; x < W; x++) {
+        const x0 = x + ix, x1 = x0 + 1;
+        if (x0 < 0 || x1 >= W) continue;
+        o[y * W + x] = (a[y0 * W + x0] * (1 - fx) + a[y0 * W + x1] * fx) * (1 - fy)
+                     + (a[y1 * W + x0] * (1 - fx) + a[y1 * W + x1] * fx) * fy;
+      }
+    }
+    return o;
+  }
+
+  // Line every photo of a capture up with the all-on one. shots: {step: {W, H, lum, (r, g, b)}}.
+  // Returns {shots (aligned copies), shifts: {step: [dx, dy, z]}, unaligned: [steps that
+  // couldn't be told and took their neighbour's drift], drift (largest, px), box}.
+  function stabilise(shots, opts) {
+    const o = Object.assign({minZ: 4, maxShift: 48}, opts || {});
+    const W = shots.white.W, H = shots.white.H;
+    const L = lights(shots.white.lum, shots.black.lum, W, H);
+    const out = {white: shots.white}, shifts = {white: [0, 0, 99]}, unaligned = [];
+    const names = Object.keys(shots).filter(n => n !== 'white');
+    let last = {dx: 0, dy: 0};
+    const est = {};
+    for (const n of names) {
+      if (n === 'black') continue;                     // nothing lit to line up with
+      const s = shiftOf(shots[n].lum, W, H, L, o.maxShift);
+      if (s.z < o.minZ) { unaligned.push(n); est[n] = {dx: last.dx, dy: last.dy, z: s.z}; }
+      else { est[n] = s; last = s; }
+    }
+    // the all-off photo was taken between all-on and the colour photos: use the nearest drift
+    const near = names.find(n => n !== 'black' && est[n] && est[n].z >= o.minZ);
+    est.black = near ? {dx: est[near].dx, dy: est[near].dy, z: 0} : {dx: 0, dy: 0, z: 0};
+    let drift = 0;
+    for (const n of names) {
+      const {dx, dy, z} = est[n], sh = shots[n];
+      shifts[n] = [Math.round(dx * 10) / 10, Math.round(dy * 10) / 10, z];
+      drift = Math.max(drift, Math.hypot(dx, dy));
+      if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) { out[n] = sh; continue; }
+      const c = {W, H, lum: shifted(sh.lum, W, H, dx, dy)};
+      if (sh.r) { c.r = shifted(sh.r, W, H, dx, dy); c.g = shifted(sh.g, W, H, dx, dy); c.b = shifted(sh.b, W, H, dx, dy); }
+      out[n] = c;
+    }
+    return {shots: out, shifts, unaligned, drift: Math.round(drift * 10) / 10, box: L.box, lit: L.count};
+  }
+
+  // One photo's luminance lined up with the all-on photo (for checks during a capture).
+  function alignedLum(img, W, H, L) {
+    const s = shiftOf(img, W, H, L);
+    return s.z < 4 ? img : shifted(img, W, H, s.dx, s.dy);
+  }
+
+  const api = {decode, grayDecode, change, stabilise, shiftOf, lights, alignedLum};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.MapDecode = api;
 })(typeof window !== 'undefined' ? window : this);
