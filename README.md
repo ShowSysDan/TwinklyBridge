@@ -7,7 +7,7 @@ patching, shows the controllers' camera maps lit with the frames going out, coun
 **Eos parameters** each map will use, and exports the map as an **Eos Pixel Map CSV** built
 from the bridge's own patch, so the desk and the bridge can't disagree about an address.
 
-Current version: **0.9.0** (see [CHANGELOG.md](CHANGELOG.md))
+Current version: **0.9.1** (see [CHANGELOG.md](CHANGELOG.md))
 
 ```
 Eos (sACN) --> twinkly-bridge (web UI :5120) --HTTP + UDP 7777--> controller 1  (VLAN B)
@@ -184,7 +184,7 @@ systemctl status twinkly-bridge
 curl http://localhost:5120/healthz
 ```
 
-`/healthz` answers `{"ok": true, "version": "0.9.0", "controllers": 0, ...}`. Then open
+`/healthz` answers `{"ok": true, "version": "0.9.1", "controllers": 0, ...}`. Then open
 `http://<bridge-ip>:5120` in a browser and follow [Workflow with Eos](#workflow-with-eos).
 
 ### 6. Lock it down (recommended on any shared network)
@@ -397,6 +397,8 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
    from the controller's port layout (one row per port, LEDs in chain order: exact
    addressing, not physical positions). The [parameter count](#parameter-count) appears
    as soon as a map is in.
+   **Clear map** on a controller's card removes its map (download the CSV first if you might
+   want it back).
 3. **Patch all, new universe each**: every controller gets contiguous universes, 170 pixels
    (510 channels) per universe, ordered by the controllers' group offset when they report one.
 4. **Export for Eos**: Eos pixel maps are flat, so a 3D map is flattened for the export
