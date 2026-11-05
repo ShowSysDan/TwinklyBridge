@@ -62,13 +62,14 @@ def test_fill_gaps_and_report():
     assert sofar["notes"] == ["50 not seen yet"]
 
 
-def run_sim(mode="normal"):
+def run_sim(mode="normal", stabilise=True):
     node = shutil.which("node")
     if not node:
         pytest.skip("node not installed")
+    env = dict(os.environ, STAB="1" if stabilise else "0")
     out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "mapdecode_sim.js"),
                           os.path.join(ROOT, "bridge", "static", "js", "mapdecode.js"), mode],
-                         capture_output=True, text=True, timeout=120, check=True)
+                         capture_output=True, text=True, timeout=120, check=True, env=env)
     return json.loads(out.stdout)
 
 
@@ -77,6 +78,17 @@ def test_decoder_on_a_harsh_synthetic_camera():
     noise and exposure drift between photos: fewer LEDs, but none put in the wrong place."""
     d = run_sim("hard")
     assert d["stats"]["found"] > 1100 and d["wrong"] == 0 and d["meanErr"] < 0.6
+
+
+def test_stabilising_a_hand_held_phone():
+    """Every photo drifts up to 12 px (sub-pixel) like a hand-held phone: lined up with the
+    all-on photo first, every LED is still found in the right place and no 'moved' is raised;
+    without lining up, the same photos find nothing."""
+    d = run_sim("shake")
+    assert d["stats"]["found"] == 1200 and d["wrong"] == 0 and d["meanErr"] < 0.5
+    assert not d["stats"]["cameraMoved"] and d["stab"]["drift"] > 5 and not d["stab"]["unaligned"]
+    raw = run_sim("shake", stabilise=False)
+    assert raw["stats"]["found"] < 100
 
 
 def test_decoder_on_synthetic_camera():

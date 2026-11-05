@@ -2,6 +2,8 @@
 // step the bridge lights, then decodes and prints a JSON summary for tests/test_mapping.py.
 const MD = require(process.argv[2]);
 const HARD = process.argv[3] === 'hard';      // bloom, clipping, banding, a floor reflection, more noise
+const SHAKE = process.argv[3] === 'shake';    // a hand-held phone: the whole picture drifts up to 12 px per photo
+const STAB = process.env.STAB !== '0';        // line the photos up before decoding (as the phone does)
 const W = 640, H = 360, N = 1250, PORT = 250;
 let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 // five strings, each a gentle wave across the frame, 4 px apart along the string
@@ -19,6 +21,7 @@ function lit(g, step) {
   return step[0] === 'b' ? !!b : !b;
 }
 function render(step) {      // -> {r, g, b, lum} as the camera sees it
+  const jx = SHAKE && step !== 'white' ? (rnd() - 0.5) * 24 : 0, jy = SHAKE && step !== 'white' ? (rnd() - 0.5) * 24 : 0;
   const gain = HARD ? 0.8 + 0.4 * rnd() : 0.85 + 0.3 * rnd(), r = new Float32Array(W * H), gg = new Float32Array(W * H), b = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) { r[i] = gg[i] = b[i] = 10; }
   for (let g = 0; g < N; g++) {
@@ -30,7 +33,7 @@ function render(step) {      // -> {r, g, b, lum} as the camera sees it
       rgb = [seenLetter === 'R' ? 1 : 0, seenLetter === 'G' ? 1 : 0, seenLetter === 'B' ? 1 : 0];
     } else rgb = lit(g, step) ? [0, 1, 0] : null;          // coding frames: green full on
     if (!rgb) continue;
-    const blobs = [[pos[g][0], pos[g][1], HARD ? 230 : 140, HARD ? 1.5 : 1.1]];
+    const blobs = [[pos[g][0] + jx, pos[g][1] + jy, HARD ? 230 : 140, HARD ? 1.5 : 1.1]];
     if (HARD) { blobs.push([pos[g][0], pos[g][1], 25, 4]);                     // bloom halo
                 blobs.push([pos[g][0] + 6, 2 * 340 - pos[g][1], 45, 2.5]); }   // reflection off a shiny floor
     for (const [x0, y0, amp, sig] of blobs) {
@@ -54,16 +57,22 @@ function render(step) {      // -> {r, g, b, lum} as the camera sees it
   }
   return {r: R, g: G, b: B, lum: L};
 }
-const black = render('black');
-const f = {W, H, black: black.lum, white: render('white').lum, whiteEnd: render('white_end').lum, bits: [],
-           colour: {black, red: render('red'), green: render('green'), blue: render('blue')}};
-for (let k = 0; k < bits; k++) f.bits.push([render('b' + k).lum, render('i' + k).lum]);
+const shots = {white: render('white'), black: render('black')};
+for (const c of ['red', 'green', 'blue']) shots[c] = render(c);
+for (let k = 0; k < bits; k++) { shots['b' + k] = render('b' + k); shots['i' + k] = render('i' + k); }
+shots.white_end = render('white_end');
+for (const k in shots) { shots[k].W = W; shots[k].H = H; }
+const st = STAB ? MD.stabilise(shots) : {shots, drift: 0, unaligned: [], box: null};
+const A = st.shots;
+const f = {W, H, black: A.black.lum, white: A.white.lum, whiteEnd: A.white_end.lum, bits: [],
+           colour: {black: A.black, red: A.red, green: A.green, blue: A.blue}};
+for (let k = 0; k < bits; k++) f.bits.push([A['b' + k].lum, A['i' + k].lum]);
 const res = MD.decode(f, N);
 let err = 0, n = 0, worst = 0, wrong = 0;
 res.pixels.forEach((p, g) => { if (!p) return; const d = Math.hypot(p[0] - pos[g][0], p[1] - pos[g][1]); err += d; n++; worst = Math.max(worst, d); if (d > 3) wrong++; });
 const colours = {};
 res.colours.forEach((c, g) => { const k = Math.floor(g / PORT) + ':' + c; colours[k] = (colours[k] || 0) + 1; });
-console.log(JSON.stringify({stats: res.stats, meanErr: err / n, worst, wrong, colours,
+console.log(JSON.stringify({stab: {drift: st.drift, unaligned: st.unaligned, box: st.box}, stats: res.stats, meanErr: err / n, worst, wrong, colours,
   foundPerPort: [0, 1, 2, 3, 4].map(p => res.points.slice(p * PORT, (p + 1) * PORT).filter(Boolean).length),
   lastPort4: Math.max(...res.points.slice(4 * PORT).map((p, k) => (p ? k + 1 : 0))),
   points: res.points, colourList: res.colours}));

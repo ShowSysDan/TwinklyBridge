@@ -4,6 +4,57 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.10.2] - 2026-11-05
+
+- The LED level's flicker test compares LED light per 16 x 16 tile instead of pixel by
+  pixel. A hand moving a fraction of a pixel between its two photos changed single pixels a
+  lot (LEDs are tiny dots) and read as flicker, so a drifting phone picked a dimmer level for
+  no reason; flicker (PWM caught by a rolling shutter) swings whole bands of rows, which the
+  tiles still see.
+
+## [0.10.1] - 2026-11-05
+
+- Fix: every capture stopped at "Choosing the LED level" with "Assignment to constant
+  variable" (0.10.0's flicker test reused the loop's name for the light positions).
+
+## [0.10.0] - 2026-11-05
+
+- **Stabilising: hand-held drift is corrected instead of failing the capture.** The all-on
+  photo shows where the lights are; every other photo lights a subset of the same LEDs, so
+  sliding it until its lit pixels land on the all-on photo's gives how far the phone drifted
+  (quarter-size search, then +-4 px at full size, then a fraction of a pixel). Each photo is
+  shifted back before decoding. Tested: photos drifting up to 12 px each find all 1,200 LEDs
+  within 0.13 px (none without stabilising); a phone drifting smoothly by 15 px during a real
+  capture in the browser found all 1,250.
+- **"Phone moved" only when it can't be corrected**: the start and end all-on photos still
+  disagree after lining up (the phone turned, not just drifted), or more than four photos
+  couldn't be lined up. The motion sensor alone no longer decides. The result says how far
+  the phone drifted when it was corrected.
+- Lining up is also used where photos are compared during a capture: the stale-photo check
+  (a drifting hand could make a stale photo look new) and the LED level's flicker test (drift
+  looked like flicker and pushed the level down for no reason).
+- **The edges of the lights** are shown on the live aim view as a yellow box around
+  everywhere the LEDs show up.
+- Per-photo drift is in the capture notes (`log.stabilise` in capture.json).
+
+## [0.9.2] - 2026-11-05
+
+Guided walk-around fixes ("hardly any LEDs found", camera view disappearing):
+
+- The guidance panel no longer sits on top of the camera picture (on a phone held upright the
+  picture is short, and the panel covered most of it); it is below it now.
+- The live detection overlay (green = LEDs seen, red = clipped, edge warning) runs while
+  you walk between captures, and after a failed capture for a few seconds to re-frame; its
+  readout is in the guidance panel too.
+- **Camera lock checked and undone if it hurts.** Locking exposure / focus / white balance
+  now keeps the camera's current values where the browser reports them, and compares the
+  LEDs before and after: if locking changed the picture (a phone jumping to a default
+  exposure or focus makes it dark or blurred: few or no LEDs found), it unlocks and carries
+  on. The capture notes say what happened (`locked` in capture.json, and on the result).
+- The walk's first capture measures the camera lag and LED level afresh instead of reusing
+  values from an earlier single capture; after a failed capture it measures again.
+- "Hardly any LEDs found" now says how many, and the LED level, lag and lock used.
+
 ## [0.9.1] - 2026-11-05
 
 - **Clear map** button on each controller card (when it has a map), with a confirmation;
