@@ -82,6 +82,20 @@ string**. Ports are concatenated in `port_id` order (gestalt `device_config.port
 five ports of 250, port *p* LED *n* (1-based) is index `p*250 + n − 1`. Camera mapping
 attaches coordinates to indices and never reorders them.
 
+## When `layout/full` is 2404 (2026-11-05)
+
+The same TWPROCTRLPLC21 (fw 4.1.0, API 2.11.0, no group) later answered
+`{"result":{"code":2404}}` on `GET /xled/v2/led/layout/full` while the Twinkly app still
+showed a map for it. The bridge's Diagnose tried, logged in, under both `/xled/v2/` and
+`/xled/v1/`: `led/layout/full`, `led/layout`, `led/layout/2d`, `led/layout/3d`,
+`layout/full`, `layout`, `led/map`, `led/mapping`, `mapping`, `map`, `led/config`: all
+2404. v2 `summary` (`app_mode`, `filters`, `group`, `led_profile`, `mac`,
+`number_of_led`), `gestalt`, `led/out/brightness`, `movies`, `movies/current` answered 200
+with no coordinates; v2 `playlist` GET is 2405 (method not allowed); every v1 URL is 2404
+on this firmware. So the map the app shows is not always held by the controller:
+the app (or the Twinkly cloud) keeps its own copy. Re-saving the mapping from the app may
+write it back; unconfirmed.
+
 ## Groups (several controllers)
 
 Each controller holds only its own chunk of the layout; `layout/full` on each, concatenated in

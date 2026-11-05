@@ -4,6 +4,12 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.3.1] - 2026-11-05
+
+- docs/protocol.md: recorded the Diagnose result from the TWPROCTRLPLC21 fw 4.1.0 that
+  shows a map in the Twinkly app but answers 2404 on every layout / map URL tried, v2 and
+  v1. The controller does not always hold the app's map.
+
 ## [0.3.0] - 2026-11-05
 
 - **Diagnose** button on each controller: logs in and GETs every likely map URL
