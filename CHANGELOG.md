@@ -4,6 +4,37 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.11.0] - 2026-11-05
+
+From three real captures (TWPROCTRLPLC21, iPhone, lit warehouse):
+
+- **Frozen camera found and fixed.** In those captures the all-off, all-on, red, green and
+  blue photos were byte-identical, and identical across two captures a minute apart: the
+  iPhone's camera feed had frozen after the first view (what showed as "the camera view
+  disappears"), so later views found almost nothing. Now: a real camera never gives two
+  byte-identical frames, so three in a row, or an ended camera track, reopen the camera and
+  retake; a frame that never arrives no longer hangs a capture. If LEDs on and off look the
+  same right after the all-off photo, the capture stops at once with a clear message
+  instead of running every pattern (the walk-around then measures afresh).
+- **No camera lock on iPhone / iPad** (the likely trigger: asking iOS to lock exposure /
+  focus can stall its camera; stabilising already handles drift). Elsewhere the lock is
+  undone if the camera stops.
+- **Memory**: photos are taken at most ~1 megapixel (720 x 1280 upright) and one buffer is
+  reused instead of a new 20 MB one per photo; the walk-around frees each view's photos once
+  sent.
+- **Uploads that finish**: photos go to the bridge as JPEG (about a tenth of a PNG); the
+  walk-around sends a view's photos before telling you to walk on; the bridge refuses an
+  empty (cut-off) upload instead of saving a 0-byte file. (The captures had 1, 6 and 7 of 29
+  files.)
+- **Mapping with the room lights on**: each capture is decoded by brightness and by
+  green-ness (how much greener than red and blue a pixel is). The coding patterns are pure
+  green and a warehouse's walls, concrete and tinsel aren't, so green-ness picks the LEDs out
+  of a lit room where brightness barely separates them (synthetic warehouse: 947 LEDs
+  against 733). The better of the two is kept; the result says which and what each found.
+- **Room brightness**: the aim view, the capture result and the walk-around's "hardly any
+  LEDs found" say how bright the room is with the LEDs off (the captures: 144 of 255) and
+  what helps.
+
 ## [0.10.2] - 2026-11-05
 
 - The LED level's flicker test compares LED light per 16 x 16 tile instead of pixel by

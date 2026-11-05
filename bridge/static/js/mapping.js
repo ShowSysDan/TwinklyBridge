@@ -6,6 +6,8 @@
 const $ = s => document.querySelector(s);
 const HTTPS_PORT = +$('#mappingScript').dataset.httpsPort || 0;
 const MAX_W = 960;                    // analysis width: plenty for LEDs a few pixels apart
+const MAX_PIXELS = 1.0e6;             // and at most ~1 megapixel (portrait 720 x 1280): iPhone memory
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const SECTIONS = ['insecure', 'setup', 'cam', 'result', 'kept', 'built', 'check'];
 let stream = null, session = null, decoded = null, wake = null, cancelled = false, lastReport = null;
 let views = null, built = null, mirror = false;
@@ -186,6 +188,7 @@ async function aimLook() {
     cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
     let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    const room = roomLevel(lo);
     const mx = Math.max(2, Math.round(W * 0.02)), my = Math.max(2, Math.round(H * 0.02));
     const amp = new Int16Array(N);
     for (let p = 0; p < N; p++) {
@@ -210,9 +213,27 @@ async function aimLook() {
       : `LEDs seen (green, inside the yellow box), ${share}% of them clipped (red).` +
         (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
         (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
-    $('#aimInfo').innerHTML = aimMsg;
-    $('#guideAim').innerHTML = aimMsg;
+    const roomMsg = roomWarning(room);
+    $('#aimInfo').innerHTML = roomMsg + aimMsg;
+    $('#guideAim').innerHTML = roomMsg + aimMsg;
   }
+}
+// How bright the room is with the LEDs off: the median of a picture's luminance (0..255).
+// LEDs are a few percent of the picture, so the median is the room. For mapping it should be
+// dark (under ~40); a lit room makes LEDs barely brighter than their surroundings, and shiny
+// surfaces (tinsel, varnish) catch their light and get read as LEDs.
+function roomLevel(lum) {
+  const hist = new Uint32Array(256);
+  for (let p = 0; p < lum.length; p++) hist[Math.min(255, lum[p] | 0)]++;
+  let need = lum.length / 2;
+  for (let v = 0; v < 256; v++) { need -= hist[v]; if (need <= 0) return v; }
+  return 255;
+}
+function roomWarning(room) {
+  if (room < 40) return '';
+  return `<span class="bad">The room is ${room > 100 ? 'bright' : 'not dark'} (${room} of 255 with the LEDs off).</span>
+    Mapping reads the LEDs by their green colour, which works with the lights on; darker still finds more, and keep
+    shiny surfaces (tinsel) out of direct light if you can.<br>`;
 }
 $('#camBtn').onclick = async () => {
   await startSensors();                       // iOS asks for motion access here (needs this tap)
@@ -225,28 +246,61 @@ $('#camBtn').onclick = async () => {
 // ---------------------------------------------------------------- capture
 const grabCanvas = document.createElement('canvas');
 const gctx = grabCanvas.getContext('2d', {willReadFrequently: true});
+// The next camera frame; gives up after 400 ms so a stalled camera can't hang a capture
+// (the frozen-camera check in grab() then reopens it).
 function nextVideoFrame(v) {
-  return new Promise(res => v.requestVideoFrameCallback ? v.requestVideoFrameCallback(() => res()) : setTimeout(res, 45));
+  return new Promise(res => {
+    const t = setTimeout(res, 400);
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(); });
+    else setTimeout(() => { clearTimeout(t); res(); }, 45);
+  });
 }
-// Average a few camera frames; returns luminance (and colour if asked) at analysis size.
-async function grab(n, colour) {
-  const v = $('#video'), W = Math.min(MAX_W, v.videoWidth), H = Math.round(v.videoHeight * W / v.videoWidth);
+// Average a few camera frames; returns luminance, green-ness (and colour if asked) at analysis
+// size. One accumulator is reused (a new one per photo made iPhones run short of memory).
+// A real camera never gives two byte-identical frames (sensor noise): if it does, the camera
+// has frozen (iOS can stall it), so it is reopened and the photo taken again.
+let accBuf = null, lastSig = -1, sameCount = 0;
+function frameSig(d) { let s = 0; for (let i = 0; i < d.length; i += 4093) s = (s * 31 + d[i]) | 0; return s; }
+async function grab(n, colour, retried) {
+  const v = $('#video');
+  const scale = Math.min(1, MAX_W / v.videoWidth, Math.sqrt(MAX_PIXELS / (v.videoWidth * v.videoHeight)));
+  const W = Math.round(v.videoWidth * scale), H = Math.round(v.videoHeight * scale);
   grabCanvas.width = W; grabCanvas.height = H;
-  const acc = new Float32Array(W * H * 3);
+  if (!accBuf || accBuf.length !== W * H * 3) accBuf = new Uint16Array(W * H * 3);
+  const acc = accBuf; acc.fill(0);
   for (let k = 0; k < n; k++) {
     await nextVideoFrame(v);
     gctx.drawImage(v, 0, 0, W, H);
     const d = gctx.getImageData(0, 0, W, H).data;
+    const sig = frameSig(d);
+    sameCount = sig === lastSig ? sameCount + 1 : 0;
+    lastSig = sig;
+    const track = stream && stream.getVideoTracks()[0];
+    if (sameCount >= 3 || (track && track.readyState === 'ended')) {
+      if (retried) throw new Error('The camera stopped sending pictures and could not be restarted: reload the page and try again.');
+      await reviveCamera();
+      return grab(n, colour, true);
+    }
     for (let i = 0, j = 0; i < d.length; i += 4, j += 3) { acc[j] += d[i]; acc[j + 1] += d[i + 1]; acc[j + 2] += d[i + 2]; }
   }
-  const lum = new Uint8ClampedArray(W * H), out = {W, H, lum};
+  const lum = new Uint8ClampedArray(W * H), chroma = new Uint8ClampedArray(W * H), out = {W, H, lum, chroma};
   if (colour) { out.r = new Uint8ClampedArray(W * H); out.g = new Uint8ClampedArray(W * H); out.b = new Uint8ClampedArray(W * H); }
   for (let p = 0, j = 0; p < W * H; p++, j += 3) {
     const r = acc[j] / n, g = acc[j + 1] / n, b = acc[j + 2] / n;
     lum[p] = 0.299 * r + 0.587 * g + 0.114 * b;
+    chroma[p] = MapDecode.greenness(r, g, b);
     if (colour) { out.r[p] = r; out.g[p] = g; out.b[p] = b; }
   }
   return out;
+}
+// Reopen the camera (after iOS stalled it): same constraints, then let it settle.
+async function reviveCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
+    facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}});
+  const v = $('#video'); v.srcObject = stream; await v.play().catch(() => {});
+  sameCount = 0; lastSig = -1;
+  await sleep(1200);
 }
 function progress(i, n, label) {
   $('#progressWrap').hidden = false; $('#progress').style.width = `${Math.round(100 * i / n)}%`;
@@ -366,6 +420,7 @@ async function chooseLevel(sessionId, settle) {
 // locking changed the picture (some phones jump to a default exposure or focus), it unlocks
 // again and says so. Returns what was locked, or ['undone: ...'].
 async function lockCamera(before) {
+  if (IOS) return ['not on iPhone / iPad (it can stall the camera there)'];
   const track = stream && stream.getVideoTracks()[0];
   if (!track || !track.getCapabilities) return [];
   const caps = track.getCapabilities(), cur = track.getSettings ? track.getSettings() : {}, want = {}, locked = [];
@@ -378,6 +433,7 @@ async function lockCamera(before) {
   }
   if (!locked.length) return [];
   try { await track.applyConstraints({advanced: [want]}); } catch { return []; }
+  if (track.readyState === 'ended') { await reviveCamera(); return ['undone: the camera stopped when locked']; }
   if (!before) return locked;
   await sleep(400);
   const after = await grab(2, false);
@@ -392,6 +448,7 @@ async function lockCamera(before) {
   return locked;
 }
 async function unlockCamera() {
+  if (IOS) return;
   const track = stream && stream.getVideoTracks()[0];
   if (!track || !track.getCapabilities) return;
   const caps = track.getCapabilities(), want = {};
@@ -462,19 +519,30 @@ async function captureView(ids, angle, reuse) {
       }
       shots[step] = prev = shot;
       prevAligned = shots.black && L ? MapDecode.alignedLum(shot.lum, shot.W, shot.H, L) : shot.lum;
+      if (step === 'black') {
+        // LEDs on vs off must differ somewhere (by brightness or by green-ness); if not, the
+        // camera isn't seeing them (frozen, covered, pointing elsewhere): stop now rather than
+        // run every pattern for nothing
+        let changed = 0;
+        const w = shots.white, b = shot;
+        for (let p = 0; p < w.lum.length; p += 2) if (w.lum[p] - b.lum[p] > 25 || w.chroma[p] - b.chroma[p] > 25) changed++;
+        log.changedPixels = changed * 2;
+        if (changed < 30)
+          throw new Error('The camera sees no difference between the LEDs on and off: point it at the installation (the live view should show green on the LEDs).');
+      }
     }
     progress(order.length + 1, order.length + 1, 'Steadying the photos ...');
     await sleep(30);
     // line every photo up with the all-on one: hand-held drift is undone before decoding
     const st = MapDecode.stabilise(shots);
     log.stabilise = {drift: st.drift, unaligned: st.unaligned, shifts: st.shifts, box: st.box};
+    log.room = roomLevel(shots.black.lum);
     progress(order.length + 1, order.length + 1, 'Working it out ...');
     await sleep(30);
-    const A = st.shots, W = A.black.W, H = A.black.H, bits = [];
-    for (let k = 0; k < session.bits; k++) bits.push([A['b' + k].lum, A['i' + k].lum]);
-    decoded = MapDecode.decode({W, H, black: A.black.lum, white: A.white.lum, whiteEnd: A.white_end.lum, bits,
-                                colour: {black: A.black, red: A.red, green: A.green, blue: A.blue}},
-                               session.total);
+    // decoded by brightness and by green-ness (which picks green LEDs out of a lit room);
+    // the one that finds more LEDs is kept
+    decoded = MapDecode.decodeBest(st.shots, session.bits, session.total);
+    log.signal = decoded.signal; log.tried = decoded.tried;
     decoded.photo = shots.white;
     decoded.shots = shots;                     // the photos as taken (sent to the bridge)
     decoded.log = log;
@@ -486,7 +554,6 @@ async function captureView(ids, angle, reuse) {
     await api('/api/mapping/step', {session: session.session, step: 'white'}).catch(() => {});
     lastReport = await api('/api/mapping/save', {session: session.session, points: decoded.points,
                                                  colours: decoded.colours, save: false}).catch(e => ({error: e.message}));
-    if ($('#autoSend').checked) { sendPhotos.quiet = true; sendPhotos().finally(() => { sendPhotos.quiet = false; }); }
     return decoded;
   } finally {
     await unlockCamera();
@@ -501,6 +568,7 @@ $('#runBtn').onclick = async () => {
   try {
     await captureView(ids, +$('#angle').value || 0, null);
     showResult();
+    if ($('#autoSend').checked) { sendPhotos.quiet = true; sendPhotos().finally(() => { sendPhotos.quiet = false; }); }
   } catch (e) {
     toast(e.message); $('#overlay').textContent = e.message;
     $('#runBtn').disabled = false;
@@ -549,6 +617,7 @@ function showResult() {
   $('#resultTitle').textContent = `Found ${s.found} of ${s.total} LEDs at ${decoded.meta.angle}°`;
   $('#resultSummary').innerHTML = [
     decoded.meta.moved ? '<strong class="bad">The phone moved more than can be corrected (it turned, or photos couldn\'t be lined up): try again holding it still.</strong>' : '',
+    roomWarning(decoded.log.room).replace('<br>', ''),
     decoded.meta.drift >= 1 ? `The phone drifted up to ${decoded.meta.drift} px during the capture; the photos were lined up again.` : '',
     decoded.meta.pitch !== null && Math.abs(decoded.meta.pitch) > 15 ? `<strong class="bad">The phone was tilted ${Math.round(decoded.meta.pitch)}&deg;: for 3D, hold it upright.</strong>` : '',
     s.found < s.total * 0.5 ? '<strong class="bad">Less than half found: darken the room, get everything in frame, raise the brightness.</strong>' : '',
@@ -556,7 +625,8 @@ function showResult() {
     `Camera lag ${decoded.log.lag.ms} ms, waited ${decoded.log.settle} ms per pattern` +
       (Object.keys(decoded.log.retakes).length ? `, ${Object.keys(decoded.log.retakes).length} photos retaken` : '') +
       (decoded.log.locked.length ? `, locked ${decoded.log.locked.join(', ')}` : '') +
-      `, LED level ${decoded.log.level.level}` +
+      `, LED level ${decoded.log.level.level}, read by ${decoded.signal} (brightness found ${decoded.tried.brightness}` +
+      (decoded.tried['green-ness'] !== undefined ? `, green-ness ${decoded.tried['green-ness']}` : '') + ')' +
       ` (tried ${decoded.log.level.tried.map(t => `${t.level}: ${t.flicker >= 0.08 ? 'flickers' : t.clipped + '% clipped'}`).join(', ')})` + '.',
   ].filter(Boolean).join('<br>');
   const rep = lastReport && lastReport.controllers;
@@ -565,7 +635,7 @@ function showResult() {
   $('#sendBtn').disabled = false; $('#sendBtn').textContent = 'Send photos to the bridge';
 }
 // Send this capture's photos to the bridge (instance/captures/), to look at what the camera saw.
-function pngOf(shot) {
+function jpegOf(shot) {
   const cv = document.createElement('canvas'); cv.width = shot.W; cv.height = shot.H;
   const ctx = cv.getContext('2d'), img = ctx.createImageData(shot.W, shot.H);
   for (let p = 0; p < shot.W * shot.H; p++) {
@@ -573,18 +643,19 @@ function pngOf(shot) {
     img.data[4 * p + 2] = shot.b ? shot.b[p] : shot.lum[p]; img.data[4 * p + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  return new Promise(res => cv.toBlob(res, 'image/png'));
+  return new Promise(res => cv.toBlob(res, 'image/jpeg', 0.92));      // ~1/10 of a PNG
 }
 $('#sendBtn').onclick = () => sendPhotos();
 async function sendPhotos() {
   const btn = $('#sendBtn'); btn.disabled = true;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + `_${Math.round(decoded.meta.angle)}deg`;
   try {
+    if (!decoded.shots) throw new Error('these photos were already sent and cleared');
     const names = Object.keys(decoded.shots);
     for (let i = 0; i < names.length; i++) {
       btn.textContent = `Sending ${i + 1} / ${names.length + 1} ...`;
-      const r = await fetch(`/api/mapping/captures/${stamp}/${names[i]}.png`,
-                            {method: 'POST', headers: {'Content-Type': 'image/png'}, body: await pngOf(decoded.shots[names[i]])});
+      const r = await fetch(`/api/mapping/captures/${stamp}/${names[i]}.jpg`,
+                            {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: await jpegOf(decoded.shots[names[i]])});
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
     }
     const info = {session: session, stats: decoded.stats, log: decoded.log, meta: decoded.meta,
@@ -665,7 +736,7 @@ async function runGuided() {
       if (d.meta.moved) { say('You moved', 'hold the phone still while it captures: trying again'); await sleep(2000); continue; }
       if (d.stats.found < d.stats.total * 0.1) {
         say(`Hardly any LEDs found (${d.stats.found} of ${d.stats.total})`,
-            'Check the green on the picture shows the LEDs, the whole piece is in frame and the room is dark; ' +
+            roomWarning(d.log.room) + 'Check the green on the picture shows the LEDs, the whole piece is in frame and the room is dark; ' +
             `then hold still. (LED level ${d.log.level.level}, camera lag ${d.log.lag.ms} ms` +
             (d.log.locked.length ? `, camera lock: ${esc(d.log.locked.join(', '))}` : '') + '.) Trying again in a moment.');
         walkCalib = null;                               // measure afresh next time
@@ -674,6 +745,11 @@ async function runGuided() {
       }
       const r = await keepView();
       guide.kept = r.views.views.length;
+      if ($('#autoSend').checked) {                      // send now, not while the next capture runs
+        say('Sending the photos to the bridge ...', '');
+        sendPhotos.quiet = true; await sendPhotos(); sendPhotos.quiet = false;
+      }
+      d.shots = null;                                    // free the photos (iPhone memory)
       say(`View ${guide.kept} kept: ${r.new} new LEDs`, `${r.views.seen_any} of ${r.views.total} seen so far. On the LEDs: green = this view, blue = before, red = not yet.`);
       await sleep(1800);
       first = false;

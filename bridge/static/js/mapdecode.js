@@ -244,9 +244,20 @@
       if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) { out[n] = sh; continue; }
       const c = {W, H, lum: shifted(sh.lum, W, H, dx, dy)};
       if (sh.r) { c.r = shifted(sh.r, W, H, dx, dy); c.g = shifted(sh.g, W, H, dx, dy); c.b = shifted(sh.b, W, H, dx, dy); }
+      if (sh.chroma) c.chroma = shifted(sh.chroma, W, H, dx, dy);
       out[n] = c;
     }
     return {shots: out, shifts, unaligned, drift: Math.round(drift * 10) / 10, box: L.box, lit: L.count};
+  }
+
+  // Green-ness of a pixel, 0..255: how much greener it is than red and blue. The coding
+  // patterns are pure green, and in a lit room almost nothing else is: white walls, grey
+  // concrete and copper tinsel score about 0 however bright, so the LEDs stand out where
+  // brightness alone hardly separates them from the room. (A clipped, white-hot LED centre
+  // scores 0 too, which is why each capture is decoded both ways and the better one kept.)
+  function greenness(r, g, b) {
+    const v = 1.6 * (g - 0.5 * (r + b));
+    return v <= 0 ? 0 : v >= 255 ? 255 : v;
   }
 
   // One photo's luminance lined up with the all-on photo (for checks during a capture).
@@ -255,7 +266,25 @@
     return s.z < 4 ? img : shifted(img, W, H, s.dx, s.dy);
   }
 
-  const api = {decode, grayDecode, change, stabilise, shiftOf, lights, alignedLum};
+  // Decode a capture by brightness and by green-ness, and keep the better one (more LEDs).
+  // shots as from stabilise(); each photo has lum and (for green-ness) chroma.
+  function decodeBest(A, bits, total, opts) {
+    const make = key => {
+      const f = {W: A.white.W, H: A.white.H, black: A.black[key], white: A.white[key], whiteEnd: A.white_end[key], bits: [],
+                 colour: {black: A.black, red: A.red, green: A.green, blue: A.blue}};
+      for (let k = 0; k < bits; k++) f.bits.push([A['b' + k][key], A['i' + k][key]]);
+      return f;
+    };
+    const byLum = decode(make('lum'), total, opts);
+    if (!A.white.chroma) return Object.assign(byLum, {signal: 'brightness', tried: {brightness: byLum.stats.found}});
+    const byGreen = decode(make('chroma'), total, opts);
+    const best = byGreen.stats.found > byLum.stats.found ? Object.assign(byGreen, {signal: 'green-ness'})
+                                                         : Object.assign(byLum, {signal: 'brightness'});
+    best.tried = {brightness: byLum.stats.found, 'green-ness': byGreen.stats.found};
+    return best;
+  }
+
+  const api = {decode, decodeBest, grayDecode, change, stabilise, shiftOf, lights, alignedLum, greenness};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.MapDecode = api;
 })(typeof window !== 'undefined' ? window : this);
