@@ -11,16 +11,52 @@ from .state import CONFIG, CONTROLLERS, lock
 EOS_UNIVERSE = 512                 # Eos absolute address = (universe - 1) * 512 + offset
 
 
+def _axis(pts):
+    """Centre of the vertical axis (x, z) - the same fit gap filling uses - and the median
+    distance from it."""
+    from .mapping import axis_centre
+    cx, cz = axis_centre(pts)
+    r = sorted(math.hypot(p[0] - cx, p[2] - cz) for p in pts)[len(pts) // 2] or 1.0
+    return cx, cz, r
+
+
 def flatten_points(pts, mode):
-    """3D -> 2D. xy: front. xz: top. zy: side. unwrap: angle around the vertical axis -> X."""
+    """3D -> 2D for the Eos pixel map (Eos maps are flat; the bridge keeps the 3D map).
+    xy: front. xz: top. zy: side.
+    unwrap: a cylinder or cone (tree, column) cut down the back and opened out: across = the
+        way round the object as seen from the front (front in the middle, left on the left),
+        scaled by the median radius so the grid has the object's proportions; down = height.
+    cone: a cone unrolled exactly into a fan, apex at the tip: distances along the surface
+        stay true, so content drawn in Eos isn't stretched near the top. Uses more cells.
+    sphere: longitude across, latitude down (balls)."""
     if mode == "xz":
         return [(p[0], p[2]) for p in pts]
     if mode == "zy":
         return [(p[2], p[1]) for p in pts]
-    if mode == "unwrap":
-        cx = sum(p[0] for p in pts) / len(pts)
-        cz = sum(p[2] for p in pts) / len(pts)
-        return [((math.atan2(p[2] - cz, p[0] - cx) + math.pi) / (2 * math.pi), p[1]) for p in pts]
+    if mode in ("unwrap", "cone", "sphere"):
+        cx, cz, r = _axis(pts)
+        ang = [math.atan2(p[0] - cx, p[2] - cz) for p in pts]          # 0 = front, + = to the right
+        if mode == "unwrap":
+            return [(a * r, p[1]) for a, p in zip(ang, pts)]
+        if mode == "sphere":
+            cy = sum(p[1] for p in pts) / len(pts)
+            return [(a / (2 * math.pi), math.atan2(p[1] - cy, math.hypot(p[0] - cx, p[2] - cz)) / math.pi + 0.5)
+                    for a, p in zip(ang, pts)]
+        # cone: apex above the top LED on the axis; slant distance s from the apex, and the
+        # fan's opening = 2*pi * sin(half angle) with sin(half angle) = radius / slant
+        rad = [math.hypot(p[0] - cx, p[2] - cz) for p in pts]
+        # apex: where the radius, fitted as a straight line against height, reaches 0 (a tree's
+        # tip is usually above its top LED); no taper (a cylinder) -> the top LED
+        top = min(p[1] for p in pts)
+        my, mr = sum(p[1] for p in pts) / len(pts), sum(rad) / len(rad)
+        vy = sum((p[1] - my) ** 2 for p in pts)
+        slope = sum((p[1] - my) * (r - mr) for p, r in zip(pts, rad)) / vy if vy else 0.0
+        if slope > 1e-6:                            # wider further down (y grows downward)
+            top = min(top, my - mr / slope)
+        slant = [math.hypot(p[1] - top, rr) for p, rr in zip(pts, rad)]
+        ratios = sorted(rr / sl for rr, sl in zip(rad, slant) if sl > 1e-9)
+        k = ratios[len(ratios) // 2] if ratios else 1.0
+        return [(sl * math.sin(a * k), sl * math.cos(a * k)) for a, sl in zip(ang, slant)]
     return [(p[0], p[1]) for p in pts]
 
 

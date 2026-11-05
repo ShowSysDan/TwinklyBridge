@@ -10,7 +10,7 @@
 <body class="mob">
 <header class="mobhead">
   <h1>Camera mapping <span class="ver">{{ version }}</span></h1>
-  <a href="/" class="quietlink">Bridge</a>
+  <a href="/?desk=1" class="quietlink">Bridge</a>
 </header>
 
 <section id="insecure" class="mobcard" hidden>
@@ -24,11 +24,13 @@
 <section id="setup" class="mobcard" hidden>
   <h2>1. What to map</h2>
   <div id="ctrlList" class="checks"></div>
+  <div id="viewsBox"></div>
   <label class="row">LED brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
   <label class="row">Wait after each pattern (ms) <input type="number" id="settle" value="300" min="50" max="3000" step="50"></label>
-  <p class="hint">Darken the room if you can. Put the phone on a tripod or lean it on something: it must not move
-    during the run (about 20 s). Every LED you want mapped has to be in the picture. Mapping several controllers
-    together puts them in one shared picture.</p>
+  <p class="hint">Darken the room if you can. Hold the phone still for each capture (about 20 s): a tripod, or lean it
+    on something. For a flat piece one capture from the front is enough. For a 3D piece (tree, sphere) capture it
+    from several sides, walking around it to your right, about 45&deg; apart (8 views all round is best; 4 is the
+    minimum), keeping the same distance and height. Stand back and zoom in rather than standing close.</p>
   <button id="camBtn" class="big primary">2. Open the camera</button>
 </section>
 
@@ -38,11 +40,16 @@
     <div class="overlay" id="overlay"></div>
     <div class="progress" id="progressWrap" hidden><div id="progress"></div></div>
   </div>
-  <div class="mobbar">
-    <button id="runBtn" class="big primary">3. Start mapping</button>
-    <button id="cancelBtn" class="big">Cancel</button>
+  <div class="mobcard tight">
+    <label class="row">This view's angle (&deg;, walking right around it)
+      <input type="number" id="angle" value="0" min="0" max="359" step="1"></label>
+    <div class="anglebtns" id="angleBtns"></div>
+    <p class="hint" id="sensors">Compass and tilt: allow motion access when asked.</p>
   </div>
-  <p class="hint center" id="camHint">Frame the whole installation, then hold still.</p>
+  <div class="mobbar">
+    <button id="runBtn" class="big primary">3. Capture</button>
+    <button id="cancelBtn" class="big">Back</button>
+  </div>
 </section>
 
 <section id="result" hidden>
@@ -53,8 +60,46 @@
     <div id="report"></div>
   </div>
   <div class="mobbar">
-    <button id="saveBtn" class="big primary">Save map</button>
+    <button id="keepBtn" class="big primary">Keep this view</button>
     <button id="retryBtn" class="big">Try again</button>
+  </div>
+</section>
+
+<section id="kept" hidden>
+  <div class="mobcard">
+    <h2 id="keptTitle">View kept</h2>
+    <p id="keptText"></p>
+    <div id="keptReport"></div>
+  </div>
+  <div class="mobbar">
+    <button id="moreBtn" class="big">Capture another view</button>
+    <button id="buildBtn" class="big primary">Build map</button>
+  </div>
+</section>
+
+<section id="built" hidden>
+  <div class="mobcard">
+    <h2 id="builtTitle">Map</h2>
+    <div class="previews"><figure><canvas id="pvFront"></canvas><figcaption>front</figcaption></figure>
+      <figure><canvas id="pvTop"></canvas><figcaption>from above</figcaption></figure></div>
+    <p id="builtText"></p>
+  </div>
+  <div class="mobbar three">
+    <button id="saveBtn" class="big primary">Save map</button>
+    <button id="flipBtn" class="big">Flip</button>
+    <button id="backBtn" class="big">Back</button>
+  </div>
+</section>
+
+<section id="check" hidden>
+  <div class="mobcard">
+    <h2>Check it on the installation</h2>
+    <p class="hint">Run a pattern placed by the map. If the map is right, the bar crosses the real object
+      smoothly and straight; a jumpy bar or stray LEDs show where it is off.</p>
+    <div class="sweeps" id="sweeps"></div>
+    <label class="row">Sweep time (s) <input type="number" id="period" value="3" min="0.5" max="30" step="0.5"></label>
+    <button id="stopBtn" class="big">Stop</button>
+    <button id="againBtn" class="big">Map again / add views</button>
   </div>
 </section>
 

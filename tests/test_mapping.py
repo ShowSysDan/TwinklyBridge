@@ -48,7 +48,8 @@ def test_fill_gaps_and_report():
     pts = [None] * 10
     pts[1], pts[4], pts[5] = [0, 0], [3, 3], [4, 4]
     out, n = mapping.fill_gaps(pts, [[0, 0, 6], [1, 6, 4]], 10)
-    assert out[0] == [0, 0] and out[2] == [1, 1] and out[3] == [2, 2] and n == 3   # port 1 all unseen: left None
+    # the gap is filled along the line; LED 0 continues the string's step backwards (not a copy)
+    assert out[0] == [-1, -1] and out[2] == [1, 1] and out[3] == [2, 2] and n == 3  # port 1 all unseen: left None
     assert out[6] is None
     cols = ["RGB"] * 3 + ["GRB"] * 3 + [None] * 4
     rep = mapping.report([[0, 0]] * 6 + [None] * 4, cols, [[0, 0, 3], [1, 3, 3], [2, 6, 4]], 10)
@@ -56,6 +57,8 @@ def test_fill_gaps_and_report():
     assert rep[2]["notes"] == ["nothing seen on this port"]
     short = mapping.report([[0, 0]] * 200 + [None] * 50, ["RGB"] * 250, [[0, 0, 250]], 250)[0]
     assert short["last_seen"] == 200 and "string ends at LED 200 of 250 configured" in short["notes"]
+    sofar = mapping.report([[0, 0]] * 200 + [None] * 50, ["RGB"] * 250, [[0, 0, 250]], 250, partial=True)[0]
+    assert sofar["notes"] == ["50 not seen yet"]
 
 
 def run_sim():

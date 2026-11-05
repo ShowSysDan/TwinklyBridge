@@ -130,3 +130,16 @@ table.rep th { color: var(--muted); font-weight: 400; }
 table.rep tr.warn td { color: var(--amber); }
 .mapinfo { background: var(--panel); border-radius: 6px; padding: 10px 14px; word-break: break-all; }
 @media (prefers-reduced-motion: reduce) { .progress > div { transition: none; } }
+.mobcard.tight { margin-top: 10px; padding: 10px 14px; }
+.anglebtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.anglebtns button { min-height: 38px; }
+.viewsum { background: var(--panel-2); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+.rowbtns { display: flex; gap: 8px; margin-top: 8px; }
+.rowbtns button { min-height: 40px; flex: 1; }
+.previews { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.previews figure { margin: 0; }
+.previews canvas { width: 100%; height: auto; border-radius: 4px; display: block; }
+.previews figcaption { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2px; }
+.mobbar.three { grid-template-columns: 2fr 1fr 1fr; }
+.sweeps { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.g { color: var(--green); } .b { color: var(--blue); } .r { color: var(--red); }

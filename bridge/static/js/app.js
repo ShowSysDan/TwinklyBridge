@@ -200,7 +200,7 @@ $('#tIndex').onchange = lightStep;
 $('#tTarget').onchange = stepWhere;
 $('#tPattern').onchange = () => { $('#tDesc').textContent = patterns[$('#tPattern').value] || ''; };
 $('#tStart').onclick = () => runTest({mode: 'pattern', pattern: $('#tPattern').value, rgb: colourRGB(),
-                                      speed: +$('#tSpeed').value, seconds: +$('#tSecs').value});
+                                      speed: +$('#tSpeed').value, period: +$('#tPeriod').value, seconds: +$('#tSecs').value});
 $('#tStop').onclick = () => runTest({mode: 'stop', ids: status.controllers.map(c => c.id)});
 api('/api/mapping/info').then(m => {
   const h = m.https || {};
@@ -219,7 +219,9 @@ api('/api/mapping/info').then(m => {
 }).catch(() => { $('#mapInfo').textContent = 'unavailable'; });
 api('/api/patterns').then(p => {
   patterns = p;
-  $('#tPattern').innerHTML = Object.keys(p).map(k => `<option value="${k}">${k}</option>`).join('');
+  const chain = Object.keys(p).filter(k => !p[k].startsWith('On the map')), onMap = Object.keys(p).filter(k => p[k].startsWith('On the map'));
+  $('#tPattern').innerHTML = `<optgroup label="Chain order">${chain.map(k => `<option value="${k}">${k}</option>`).join('')}</optgroup>` +
+    `<optgroup label="On the map (checks the map lines up)">${onMap.map(k => `<option value="${k}">${k}</option>`).join('')}</optgroup>`;
   $('#tPattern').onchange();
 });
 
@@ -252,26 +254,55 @@ $('#saveSettings').onclick = async () => {
 
 // ---------------------------------------------------------------- live map
 const canvas = $('#map'), ctx = canvas.getContext('2d');
-async function loadMaps() { maps = (await api('/api/map')).filter(m => m.points.length); }
+let flatTouched = false;
+async function loadMaps() {
+  maps = (await api('/api/map')).filter(m => m.points.length);
+  // 3D maps are exported flat: default the Eos export to unwrapping them (until the user picks)
+  if (!flatTouched) $('#eFlat').value = has3D() ? 'unwrap' : 'xy';
+}
+// 3D maps: drag the live map to turn it (yaw around the vertical axis, pitch over the top).
+let yaw = 0, pitch = 0, drag = null;
+function has3D() {
+  for (const m of maps) {
+    let lo = Infinity, hi = -Infinity;
+    for (const p of m.points) { lo = Math.min(lo, p[2] || 0); hi = Math.max(hi, p[2] || 0); }
+    if (hi - lo > 1e-6) return true;
+  }
+  return false;
+}
+function centreOf(list) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const m of list) for (const p of m.points) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k] || 0); hi[k] = Math.max(hi[k], p[k] || 0); }
+  return lo.map((v, k) => (v + hi[k]) / 2);
+}
+// -> [screen x, screen y, depth (bigger = nearer)] around centre c
+function project(p, c) {
+  const dx = p[0] - c[0], dy = p[1] - c[1], dz = (p[2] || 0) - c[2];
+  const x1 = dx * Math.cos(yaw) - dz * Math.sin(yaw), z1 = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+  return [x1, dy * Math.cos(pitch) - z1 * Math.sin(pitch), dy * Math.sin(pitch) + z1 * Math.cos(pitch)];
+}
 function layoutTiles() {
   const W = canvas.width, H = canvas.height, pad = 40;
   if (!maps.length) return [];
-  if ($('#shared').checked) {
+  const box = (list, c) => {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const m of maps) for (const [x, y] of m.points) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-    return maps.map(m => ({m, x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad, x0, x1, y0, y1, label: ''}));
+    for (const m of list) { m.proj = m.points.map(p => project(p, c));
+      for (const [x, y] of m.proj) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); } }
+    return {x0, x1, y0, y1};
+  };
+  if ($('#shared').checked) {
+    const b = box(maps, centreOf(maps));
+    return maps.map(m => ({m, x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad, ...b, label: ''}));
   }
   const cols = Math.ceil(Math.sqrt(maps.length)), rows = Math.ceil(maps.length / cols);
   const tw = (W - pad) / cols, th = (H - pad) / rows;
-  return maps.map((m, i) => {
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const [x, y] of m.points) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-    return {m, x: pad / 2 + (i % cols) * tw + 10, y: pad / 2 + Math.floor(i / cols) * th + 26, w: tw - 20, h: th - 40, x0, x1, y0, y1, label: m.name};
-  });
+  return maps.map((m, i) => ({m, x: pad / 2 + (i % cols) * tw + 10, y: pad / 2 + Math.floor(i / cols) * th + 26,
+                              w: tw - 20, h: th - 40, ...box([m], centreOf([m])), label: m.name}));
 }
 function draw() {
   if (!maps.length) { canvas.hidden = true; $('#mapEmpty').hidden = false; return; }
   canvas.hidden = false; $('#mapEmpty').hidden = true;
+  $('#rotHint').hidden = !has3D();
   ctx.fillStyle = '#0f1218'; ctx.fillRect(0, 0, canvas.width, canvas.height);
   hit = [];
   for (const t of layoutTiles()) {
@@ -280,26 +311,45 @@ function draw() {
     const r = Math.max(1.5, Math.min(4, s * 0.004 * 2 + 1));
     if (t.label) { ctx.fillStyle = '#8c95a6'; ctx.font = '13px "IBM Plex Sans", system-ui'; ctx.fillText(t.label, t.x, t.y - 10); }
     const f = frames[m.id] ? Uint8Array.from(atob(frames[m.id]), ch => ch.charCodeAt(0)) : null;
-    m.points.forEach(([x, y], i) => {
+    let dlo = Infinity, dhi = -Infinity;
+    for (const p of m.proj) { dlo = Math.min(dlo, p[2]); dhi = Math.max(dhi, p[2]); }
+    const order = m.proj.map((p, i) => i).sort((a, b) => m.proj[a][2] - m.proj[b][2]);    // far first
+    const guessed = new Set(m.filled || []);                                                // drawn as rings
+    for (const i of order) {
+      const [x, y, d] = m.proj[i];
       const px = ox + (x - t.x0) * s, py = oy + (y - t.y0) * s;      // Twinkly y grows downward, same as canvas
-      let col = '#2c3442';
+      const near = dhi > dlo ? 0.45 + 0.55 * (d - dlo) / (dhi - dlo) : 1;
+      let col = `rgba(44,52,66,${near})`;
       if (f) {
         const o = i * m.bpp;
         let R = 0, G = 0, B = 0;
         if (m.bpp === 4) { const w = f[o] || 0; R = Math.min(255, (f[o+1]||0) + w); G = Math.min(255, (f[o+2]||0) + w); B = Math.min(255, (f[o+3]||0) + w); }
         else { R = f[o] || 0; G = f[o+1] || 0; B = f[o+2] || 0; }
-        if (R + G + B > 0) col = `rgb(${R},${G},${B})`;
+        if (R + G + B > 0) col = `rgba(${R},${G},${B},${near})`;
       }
-      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
-      hit.push({cid: m.id, c: m, index: i, x: px, y: py});
-    });
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+      if (guessed.has(i) && col.startsWith('rgba(44,')) { ctx.strokeStyle = `rgba(140,149,166,${near})`; ctx.lineWidth = 1; ctx.stroke(); }
+      else { ctx.fillStyle = col; ctx.fill(); }
+      hit.push({cid: m.id, c: m, index: i, x: px, y: py, d});
+    }
   }
 }
+canvas.addEventListener('pointerdown', ev => { drag = {x: ev.clientX, y: ev.clientY, yaw, pitch, moved: false}; });
+window.addEventListener('pointermove', ev => {
+  if (!drag || !has3D()) return;
+  const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+  if (!drag.moved) return;
+  yaw = drag.yaw + dx * 0.01; pitch = Math.max(-1.5, Math.min(1.5, drag.pitch + dy * 0.01)); draw();
+});
+window.addEventListener('pointerup', () => { setTimeout(() => { drag = null; }, 0); });
+canvas.addEventListener('dblclick', () => { yaw = 0; pitch = 0; draw(); });
 canvas.addEventListener('click', ev => {
+  if (drag && drag.moved) return;                                     // that was a turn, not a pick
   const rect = canvas.getBoundingClientRect();
   const x = (ev.clientX - rect.left) * canvas.width / rect.width, y = (ev.clientY - rect.top) * canvas.height / rect.height;
   let best = null, bd = 12 * 12;
-  for (const h of hit) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
+  for (const h of hit) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd || (d === bd && best && h.d > best.d)) { bd = d; best = h; } }
   if (!best) return;
   const [port, led] = portOf(best.c, best.index);
   $('#pick').textContent = `${best.c.name}: index ${best.index}, port ${port}, LED ${led}`;
@@ -325,6 +375,7 @@ async function eosDownload(path) {
   a.href = URL.createObjectURL(blob); a.download = path.split('/').pop().split('?')[0]; a.click(); URL.revokeObjectURL(a.href);
   $('#eosMsg').textContent = 'Downloaded';
 }
+$('#eFlat').addEventListener('change', () => { flatTouched = true; });
 $('#eosMap').onclick = () => eosDownload('/api/export/eos_pixelmap.csv');
 $('#eosPatch').onclick = () => eosDownload('/api/export/eos_patch.csv');
 $('#eosPreview').onclick = () => window.open('/api/export/eos_preview.svg?' + eosQuery(), '_blank');

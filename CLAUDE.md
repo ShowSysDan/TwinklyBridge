@@ -28,5 +28,8 @@ README.md has the design, install steps and API; docs/protocol.md the Twinkly wi
 - Camera mapping: the bridge side (frames, gap filling, report) is `bridge/mapping.py`; the
   image work is `bridge/static/js/mapdecode.js`, which must stay a pure function usable in
   Node (`tests/js/mapdecode_sim.js` runs it against a synthetic camera).
+- 3D: views are combined in `mapping.combine` (flat / around); unseen LEDs are filled by
+  `mapping.fill_gaps` (cylinder coordinates round `mapping.axis_centre`), which the Eos
+  unwrap / cone flattening in `layout.flatten_points` also uses for its axis.
 - Parameter counts come from `Controller.parameters` / `layout.parameter_summary()`;
   don't recompute them elsewhere.

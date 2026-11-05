@@ -4,6 +4,7 @@ render(controller, name, t, params) -> bytes in the controller's wire format
 (R G B per LED, or W R G B for RGBW). t is seconds since the pattern started.
 """
 import colorsys
+import math
 
 PATTERNS = {
     "channels": "Whole chain red, green, blue, then white, 1.5 s each: checks colour order",
@@ -13,7 +14,61 @@ PATTERNS = {
     "gradient": "White ramp from off to full along each port: checks per-pixel brightness",
     "rainbow": "Scrolling rainbow along the chain: every LED a different colour each frame",
     "solid": "Every LED the chosen colour",
+    "sweep_x": "On the map: a bar moving left to right (Sweep time = one pass)",
+    "sweep_y": "On the map: a bar moving top to bottom",
+    "sweep_z": "On the map: a bar moving front to back (3D maps)",
+    "ring": "On the map: a ring growing out from the centre",
+    "spin": "On the map: a plane spinning around the vertical axis (3D maps: trees, spheres)",
+    "map_rainbow": "On the map: a rainbow across the width, scrolling",
 }
+# Patterns that place light by position, so they need a map (and say where it is wrong).
+MAP_PATTERNS = {"sweep_x", "sweep_y", "sweep_z", "ring", "spin", "map_rainbow"}
+
+
+def bounds(ctrls):
+    """Shared box around the maps of the given controllers, so a sweep crosses them all as one."""
+    pts = [p for c in ctrls if c.map for p in c.map[:c.n_led]]
+    if not pts:
+        return None
+    lo = [min(p[k] if len(p) > k else 0 for p in pts) for k in range(3)]
+    hi = [max(p[k] if len(p) > k else 0 for p in pts) for k in range(3)]
+    return {"lo": lo, "hi": hi}
+
+
+def _map_pattern(c, name, t, params):
+    b = params.get("bounds") or bounds([c])
+    if not c.map or not b:
+        return bytes(c.n_led * c.bpp)
+    lo, hi = b["lo"], b["hi"]
+    span = [(hi[k] - lo[k]) or 1e-9 for k in range(3)]
+    mid = [(hi[k] + lo[k]) / 2 for k in range(3)]
+    period = max(0.2, float(params.get("period") or 3))
+    phase = (t / period) % 1.0
+    rgb = tuple(max(0, min(255, int(v))) for v in (params.get("rgb") or (255, 255, 255))[:3])
+    width = 0.08
+    px = []
+    for i in range(c.n_led):
+        p = c.map[i] if i < len(c.map) else (0, 0, 0)
+        x, y, z = p[0], p[1], p[2] if len(p) > 2 else 0
+        if name in ("sweep_x", "sweep_y", "sweep_z"):
+            k = "xyz".index(name[-1])
+            pos = ((x, y, z)[k] - lo[k]) / span[k]
+            d = abs(pos - (phase * (1 + 2 * width) - width))
+        elif name == "ring":
+            r = math.sqrt(sum((((x, y, z)[k] - mid[k]) / (max(span) or 1)) ** 2 for k in range(3))) * 2
+            d = abs(r - phase * 1.8)
+        elif name == "spin":
+            a = (math.atan2(z - mid[2], x - mid[0]) / (2 * math.pi)) % 1.0
+            d = min(abs(a - phase), 1 - abs(a - phase)) * 2
+        else:                                                   # map_rainbow
+            h = ((x - lo[0]) / span[0] + phase) % 1.0
+            r, g, bl = colorsys.hsv_to_rgb(h, 1.0, 1.0)
+            px.append((int(r * 255), int(g * 255), int(bl * 255)))
+            continue
+        f = max(0.0, 1 - d / width)
+        px.append(tuple(int(v * f) for v in rgb))
+    return pack(c, px)
+
 
 PORT_COLOURS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 160, 0), (255, 0, 255),
                 (0, 255, 255), (255, 255, 0), (128, 0, 255)]
@@ -37,6 +92,8 @@ def _ports(c):
 
 
 def render(c, name, t, params):
+    if name in MAP_PATTERNS:
+        return _map_pattern(c, name, t, params)
     n = c.n_led
     rgb = tuple(max(0, min(255, int(v))) for v in (params.get("rgb") or (255, 255, 255))[:3])
     if name == "solid":
