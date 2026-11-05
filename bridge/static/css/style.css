@@ -155,3 +155,4 @@ label.checkrow input { width: 20px; height: 20px; flex: none; margin-top: 2px; }
 .gauge { height: 10px; background: #fff3; border-radius: 5px; margin: 8px 0; overflow: hidden; }
 .gauge > div { height: 100%; background: var(--amber); }
 #camButtons #runBtn { grid-column: 1 / -1; }
+.warnline { color: var(--amber); margin-top: 6px; }

@@ -25,6 +25,11 @@ urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHa
 
 RT_PORT = 7777
 FRAGMENT = 900
+# While streaming, check this often (s) that the controller is still in rt mode under our login.
+# Another client - the Twinkly app is the usual one - logging in makes our token stale (the
+# controller then silently drops our UDP frames) or switches it to another mode; 30 s of
+# re-asserting is too slow to notice, so look every few seconds and take it back.
+RT_CHECK_S = 5
 
 # Read-only URLs Diagnose tries, to find where a firmware keeps its map. led/layout/full is
 # the documented one; Pro fw 4.1.0 keeps the app's map in the Twinkly cloud instead (see
@@ -121,6 +126,8 @@ class Controller:
         self.error = ""
         self.prev_mode = None
         self.rt_asserted_at = 0.0
+        self.rt_checked_at = 0.0
+        self.taken = ""                                      # last time another app took the controller
         self.last_attempt = 0.0
         self.active = False
         self.want_live = False
@@ -148,6 +155,7 @@ class Controller:
                 "universes": self.universes(cpu) if self.source == "sacn" else [],
                 "ddp_range": [self.ddp_start, self.ddp_start + self.n_led * self.bpp - 1] if self.source == "ddp" and self.n_led else [],
                 "status": self.status, "error": self.error, "active": self.active, "map_error": self.map_error,
+                "taken": self.taken,
                 "frames_sent": self.frames_sent, "api": self.api, "prev_mode": self.prev_mode,
                 "testing": self.testing(time.time()),
                 "test_pattern": (self.test or {}).get("pattern") or ("frame" if self.test else "")}
@@ -248,6 +256,27 @@ class Controller:
                 return False
             if not self.connect():
                 return False
+        if self.rt_asserted_at and now - self.rt_asserted_at <= CONFIG["output"]["rt_reassert_s"] \
+                and now - self.rt_checked_at > RT_CHECK_S:
+            self.rt_checked_at = now
+            try:
+                m, _ = api_call(self.ip, ["/xled/v2/application/mode", "/xled/v1/led/mode"], token=self.token, timeout=2)
+                if m.get("mode") != "rt":
+                    log.warning("%s (%s): switched to %s by something else (the Twinkly app?): taking it back",
+                                self.name, self.ip, m.get("mode"))
+                    self.taken = f"switched to {m.get('mode')} by another app at {time.strftime('%H:%M:%S')}"
+                    self.rt_asserted_at = 0                      # re-assert below, now
+            except urllib.error.HTTPError as e:
+                if e.code == 401:                                # our login was replaced by another client's
+                    log.warning("%s (%s): our login was replaced (the Twinkly app?): logging in again",
+                                self.name, self.ip)
+                    self.taken = f"login replaced by another app at {time.strftime('%H:%M:%S')}"
+                    self.token = None
+                    if not self.connect():
+                        return False
+                    self.rt_asserted_at = 0
+            except Exception:                                    # noqa: BLE001 - a missed check is fine
+                pass
         if now - self.rt_asserted_at > CONFIG["output"]["rt_reassert_s"]:
             try:
                 self.set_mode({"mode": "rt"})

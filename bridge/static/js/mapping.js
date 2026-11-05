@@ -25,6 +25,8 @@ async function api(path, body, method) {
   if (!r.ok) throw new Error(j.error || `${path}: HTTP ${r.status}`);
   return j;
 }
+// Tell the bridge's log (camera trouble on the phone ends up next to everything else).
+function phoneLog(msg) { api('/api/mapping/log', {msg}).catch(() => {}); }
 function esc(s) { return String(s).replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch])); }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function show(id) { for (const s of SECTIONS) $('#' + s).hidden = s !== id; window.scrollTo(0, 0); }
@@ -134,7 +136,8 @@ async function openCamera() {
 // warns when LEDs reach the edge of the picture (some are probably out of frame). It doesn't
 // count LEDs: at this size neighbouring LEDs merge, so a count would be badly low.
 const AIM_W = 320;
-const aim = {on: false, ring: [], blinkLevel: 255, session: null};
+const aim = {on: false, ring: [], blinkLevel: 255, session: null, started: 0};
+const AIM_IDLE_MS = 120000;           // the live view hands the LEDs back after 2 minutes
 const aimCanvas = document.createElement('canvas');
 const actx = aimCanvas.getContext('2d', {willReadFrequently: true});
 function tickedIds() { return [...document.querySelectorAll('#ctrlList input:checked')].map(i => i.value); }
@@ -142,7 +145,8 @@ async function startAim() {
   if (aim.on || !stream) return;
   const ids = tickedIds();
   if (!ids.length) return;
-  aim.on = true; aim.ring = [];
+  aim.on = true; aim.ring = []; aim.started = performance.now();
+  $('#resumeAim').hidden = true;
   try { aim.session = await api('/api/mapping/start', {ids, level: +$('#level').value}); }
   catch (e) { aim.on = false; $('#aimInfo').textContent = e.message; return; }
   aimBlink(); aimLook();
@@ -162,12 +166,39 @@ async function aimBlink() {
     catch { aim.busy = false; aim.on = false; return; }
     aim.busy = false;
     await sleep(650);
+    if (!guide && performance.now() - aim.started > AIM_IDLE_MS) {     // nobody captured: hand the LEDs back
+      await stopAim();
+      api('/api/mapping/stop', {}).catch(() => {});
+      $('#aimInfo').textContent = 'Live view paused after 2 minutes, so the LEDs go back to normal control.';
+      $('#resumeAim').hidden = false;
+      return;
+    }
   }
 }
 async function aimLook() {
   const v = $('#video'), cv = $('#aim');
+  let frames = 0, since = performance.now(), noFrame = 0;
   while (aim.on) {
-    await nextVideoFrame(v);
+    const got = await nextVideoFrame(v);
+    // camera watchdog: a paused preview is restarted; a camera that stopped is reopened
+    const track = stream && stream.getVideoTracks()[0];
+    noFrame = got ? 0 : noFrame + 1;
+    if (v.paused) v.play().catch(() => {});
+    if (track && (track.readyState === 'ended' || noFrame >= 5)) {
+      const why = track.readyState === 'ended' ? 'the camera stopped' : 'no picture from the camera for 2 s';
+      $('#camState').innerHTML = `<span class="bad">${why}: restarting it ...</span>`;
+      phoneLog(`camera watchdog: ${why} (video ${v.videoWidth}x${v.videoHeight}, paused ${v.paused}, muted ${track.muted}); reopening`);
+      try { await reviveCamera(); } catch (e) { $('#camState').innerHTML = `<span class="bad">Camera: ${esc(e.message)}. Reload the page.</span>`; phoneLog('camera reopen failed: ' + e.message); }
+      noFrame = 0;
+      continue;
+    }
+    if (got) frames++;
+    if (performance.now() - since > 2000) {
+      const fps = Math.round(frames * 1000 / (performance.now() - since));
+      $('#camState').innerHTML = !v.videoWidth ? '<span class="bad">No camera picture yet.</span>'
+        : `Camera ${v.videoWidth} x ${v.videoHeight}, ${fps} fps` + (track && track.muted ? ' <span class="bad">(muted by the phone)</span>' : '');
+      frames = 0; since = performance.now();
+    }
     const W = AIM_W, H = Math.max(1, Math.round(v.videoHeight * AIM_W / v.videoWidth));
     aimCanvas.width = W; aimCanvas.height = H;
     actx.drawImage(v, 0, 0, W, H);
@@ -246,21 +277,27 @@ $('#camBtn').onclick = async () => {
 // ---------------------------------------------------------------- capture
 const grabCanvas = document.createElement('canvas');
 const gctx = grabCanvas.getContext('2d', {willReadFrequently: true});
-// The next camera frame; gives up after 400 ms so a stalled camera can't hang a capture
-// (the frozen-camera check in grab() then reopens it).
+// The next camera frame: resolves true when one arrives, false after 400 ms without one (so
+// a stalled camera can't hang a capture; grab() counts those and reopens the camera).
 function nextVideoFrame(v) {
   return new Promise(res => {
-    const t = setTimeout(res, 400);
-    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(); });
-    else setTimeout(() => { clearTimeout(t); res(); }, 45);
+    const t = setTimeout(() => res(false), 400);
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(true); });
+    else setTimeout(() => { clearTimeout(t); res(true); }, 45);
   });
 }
 // Average a few camera frames; returns luminance, green-ness (and colour if asked) at analysis
 // size. One accumulator is reused (a new one per photo made iPhones run short of memory).
-// A real camera never gives two byte-identical frames (sensor noise): if it does, the camera
-// has frozen (iOS can stall it), so it is reopened and the photo taken again.
-let accBuf = null, lastSig = -1, sameCount = 0;
-function frameSig(d) { let s = 0; for (let i = 0; i < d.length; i += 4093) s = (s * 31 + d[i]) | 0; return s; }
+// Frozen camera (iOS can stall it): no new frame for 3 x 400 ms, or the same frame three times
+// running - a real camera's sensor noise makes that impossible, except in a nearly black
+// picture (noise reduction can give solid zeros), which doesn't count. Then the camera is
+// reopened and the photo taken again.
+let accBuf = null, lastSig = -1, sameCount = 0, stalls = 0;
+function frameSig(d) {
+  let s = 0, top = 0;
+  for (let i = 0; i < d.length; i += 4093) { s = (s * 31 + d[i]) | 0; if (d[i] > top) top = d[i]; }
+  return top > 12 ? s : -2 - Math.random();       // nearly black: never "the same"
+}
 async function grab(n, colour, retried) {
   const v = $('#video');
   const scale = Math.min(1, MAX_W / v.videoWidth, Math.sqrt(MAX_PIXELS / (v.videoWidth * v.videoHeight)));
@@ -269,14 +306,14 @@ async function grab(n, colour, retried) {
   if (!accBuf || accBuf.length !== W * H * 3) accBuf = new Uint16Array(W * H * 3);
   const acc = accBuf; acc.fill(0);
   for (let k = 0; k < n; k++) {
-    await nextVideoFrame(v);
+    stalls = (await nextVideoFrame(v)) ? 0 : stalls + 1;
     gctx.drawImage(v, 0, 0, W, H);
     const d = gctx.getImageData(0, 0, W, H).data;
     const sig = frameSig(d);
     sameCount = sig === lastSig ? sameCount + 1 : 0;
     lastSig = sig;
     const track = stream && stream.getVideoTracks()[0];
-    if (sameCount >= 3 || (track && track.readyState === 'ended')) {
+    if (sameCount >= 3 || stalls >= 3 || (track && track.readyState === 'ended')) {
       if (retried) throw new Error('The camera stopped sending pictures and could not be restarted: reload the page and try again.');
       await reviveCamera();
       return grab(n, colour, true);
@@ -295,11 +332,12 @@ async function grab(n, colour, retried) {
 }
 // Reopen the camera (after iOS stalled it): same constraints, then let it settle.
 async function reviveCamera() {
+  phoneLog('reopening the camera');
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {
     facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}});
   const v = $('#video'); v.srcObject = stream; await v.play().catch(() => {});
-  sameCount = 0; lastSig = -1;
+  sameCount = 0; lastSig = -1; stalls = 0;
   await sleep(1200);
 }
 function progress(i, n, label) {
@@ -813,6 +851,7 @@ async function walkTo(target) {
   });
 }
 $('#guideBtn').onclick = () => runGuided();
+$('#resumeAim').onclick = () => startAim();
 $('#hereBtn').onclick = () => { if (guide && guide.wait) guide.wait(true); };
 $('#finishBtn').onclick = () => { if (guide) { guide.finish = true; cancelled = true; if (guide.wait) guide.wait(false); } };
 $('#stopGuideBtn').onclick = async () => {
@@ -894,7 +933,17 @@ $('#sweeps').onclick = async e => {
 $('#stopBtn').onclick = () => api('/api/test', {mode: 'stop'}).then(() => toast('Stopped')).catch(e => toast(e.message));
 $('#againBtn').onclick = () => { api('/api/test', {mode: 'stop'}).catch(() => {}); init(); };
 
+// Phone locked, app switched, tab closed: stop blinking and hand the LEDs back at once, so the
+// desk and the Twinkly app aren't overridden by a mapping page nobody is looking at.
+function handBack() {
+  if (aim.on) stopAim();
+  if (guide) { guide.stop = true; if (guide.wait) guide.wait(false); }
+  cancelled = true;
+  try { navigator.sendBeacon('/api/mapping/stop'); } catch { api('/api/mapping/stop', {}).catch(() => {}); }
+}
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && session && !decoded) { cancelled = true; api('/api/mapping/stop', {}).catch(() => {}); }
+  if (document.hidden) handBack();
+  else if (!$('#cam').hidden && stream && !aim.on) $('#resumeAim').hidden = false;
 });
+window.addEventListener('pagehide', handBack);
 init().catch(e => toast(e.message));
