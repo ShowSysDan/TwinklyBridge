@@ -135,7 +135,7 @@ async function openCamera() {
 // green where the camera sees LEDs and red where they are clipped (too bright: bloom), and
 // warns when LEDs reach the edge of the picture (some are probably out of frame). It doesn't
 // count LEDs: at this size neighbouring LEDs merge, so a count would be badly low.
-const AIM_W = 320;
+const AIM_W = 480;
 const aim = {on: false, ring: [], blinkLevel: 255, session: null, started: 0};
 const AIM_IDLE_MS = 120000;           // the live view hands the LEDs back after 2 minutes
 const aimCanvas = document.createElement('canvas');
@@ -217,31 +217,38 @@ async function aimLook() {
       if (f.top[p] > peak[p]) peak[p] = f.top[p];
     }
     cv.width = W; cv.height = H;
-    const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
-    let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
     const room = roomLevel(lo);
     const mx = Math.max(2, Math.round(W * 0.02)), my = Math.max(2, Math.round(H * 0.02));
-    const amp = new Int16Array(N);
-    for (let p = 0; p < N; p++) {
-      amp[p] = hi[p] - lo[p];
-      if (amp[p] < 25) continue;
-      lit++;
-      const clip = peak[p] >= 250;
+    // Mark the LEDs, do not paint them. The old overlay filled every pixel that brightened by
+    // 25, which on a tinsel prop in a lit room is a fifth of the picture standing still and
+    // nearly half of it in the hand (a bright edge enters the 2 s window at one place and
+    // leaves at another), so the preview vanished under a green slab. The LEDs are ~3 px dots:
+    // find them with the same top-hat the decoder uses and ring each one. A ring per LED can
+    // cover at most a few percent of the picture however much the hand shakes.
+    const amp = new Float32Array(N);
+    for (let p = 0; p < N; p++) amp[p] = hi[p] - lo[p];
+    const spots = MapDecode.findSpots(amp, W, H, 'auto').spots;
+    let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    ctx.lineWidth = 1;
+    for (const sp of spots) {
+      if (++lit > 1200) break;                        // a hard ceiling on what can be drawn
+      const p = sp.y * W + sp.x, clip = peak[p] >= 250;
       if (clip) clipped++;
-      const x = p % W, y = (p / W) | 0;
-      if (x < mx || y < my || x >= W - mx || y >= H - my) edge++;
-      if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
-      img.data[4 * p] = clip ? 255 : 0; img.data[4 * p + 1] = clip ? 40 : 255; img.data[4 * p + 2] = 60;
-      img.data[4 * p + 3] = 170;
+      if (sp.x < mx || sp.y < my || sp.x >= W - mx || sp.y >= H - my) edge++;
+      if (sp.x < bx0) bx0 = sp.x; if (sp.x > bx1) bx1 = sp.x;
+      if (sp.y < by0) by0 = sp.y; if (sp.y > by1) by1 = sp.y;
+      ctx.strokeStyle = clip ? 'rgba(255, 60, 40, 0.95)' : 'rgba(40, 255, 90, 0.95)';
+      ctx.strokeRect(sp.x - 2.5, sp.y - 2.5, 5, 5);
     }
-    ctx.putImageData(img, 0, 0);
     if (bx1 >= 0) {                                    // the edges of the lights: a box round them
       ctx.strokeStyle = 'rgba(255, 200, 0, 0.9)'; ctx.lineWidth = 1.5;
-      ctx.strokeRect(bx0 - 2, by0 - 2, bx1 - bx0 + 4, by1 - by0 + 4);
+      ctx.strokeRect(bx0 - 3, by0 - 3, bx1 - bx0 + 6, by1 - by0 + 6);
     }
     const share = lit ? Math.round(100 * clipped / lit) : 0;
     const aimMsg = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
-      : `LEDs seen (green, inside the yellow box), ${share}% of them clipped (red).` +
+      : `${lit} LEDs seen (green rings, inside the yellow box), ${share}% of them clipped (red).` +
         (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
         (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
     const roomMsg = roomWarning(room);
@@ -396,7 +403,11 @@ async function cameraLag(sessionId) {
   if (lit < 40 * dark.length / 21600)          // about two LEDs' worth at 240 x 90
     throw new Error('The camera sees no change when the LEDs come on: point it at the installation, darken the room, and check the controllers are ticked.');
   const reach = samples.find(s => s[1] >= 0.9 * lit);
-  return {ms: Math.round(reach[0]), roundTrip: Math.round(t1 - t0)};
+  // measured from BEFORE the request, because the bridge starts sending the new frame while the
+  // request is still in flight: timing from the reply makes the lag look shorter than it is by
+  // however long the round trip took, and any later step with a faster round trip then
+  // photographs the previous pattern.
+  return {ms: Math.round(reach[0] + (t1 - t0)), roundTrip: Math.round(t1 - t0)};
 }
 // Pick the LED level for the coding patterns from what the camera sees. Dimming LEDs is PWM
 // (switching them on and off fast), which a phone's rolling shutter can catch as stripes;
@@ -537,8 +548,9 @@ async function captureView(ids, angle, reuse) {
       if (cancelled) throw new Error('Stopped.');
       const step = order[i];
       progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}`);
+      const sent = performance.now();
       await api('/api/mapping/step', {session: session.session, step});
-      await sleep(settle);
+      await sleep(Math.max(40, settle - (performance.now() - sent)));   // settle counts from the request
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
       let shot = await grab(step === 'black' ? 4 : 2, colour);
       // a photo that hardly differs from the last one was taken before the LEDs changed

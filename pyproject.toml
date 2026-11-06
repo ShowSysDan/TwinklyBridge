@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "twinkly-bridge"
-version = "0.11.2"
+version = "0.12.0"
 description = "sACN / DDP to Twinkly and Twinkly Pro real-time bridge with a web UI, map export for Eos and xLights"
 readme = "README.md"
 requires-python = ">=3.10"

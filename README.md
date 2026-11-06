@@ -427,18 +427,23 @@ port's real string length and checks its colour order.
    end up in one coordinate space, so the Eos export can lay them out as one map.
 3. **Open the camera** and allow camera and motion access (motion gives the compass and tilt
    readouts). Frame the whole installation and hold the phone still: a tripod, or leaned
-   against something. Darken the room if you can.
-   While you aim, the LEDs blink and the preview shows green where the camera sees them,
-   red where they are too bright (clipped), and warns if LEDs reach the edge of the picture.
+   against something. A lit room is fine; the room's own texture is what the drift is measured
+   against, so a warehouse with the lights on maps better than a blacked-out one.
+   While you aim, the LEDs blink and the preview rings each LED the camera can see in green,
+   red where it is too bright (clipped), and warns if LEDs reach the edge of the picture. The
+   rings sit on the LEDs and never cover the picture, so you can still see what you are aiming at.
 4. **Capture.** The phone picks the LED level (it tries 255 down to 32 and takes the brightest
    that neither flickers on this camera nor clips: dimming LEDs is PWM, which a phone's
    rolling shutter can catch as stripes), first times the camera (LEDs off, then on: how long until the
    camera shows it) and sets its wait from that, then the LEDs flash 28 full-green patterns
    (about 15-25 s for 1,250 LEDs, depending on the camera); keep still until it says
    *Working it out*. Every photo is checked against the one before; one taken before the
-   LEDs changed is taken again. A hand-held phone may drift a little: every photo is lined up
-   with the all-on photo (using the LEDs themselves) before decoding, and *the phone moved* is
-   only reported when it turned or drifted too far to correct.
+   LEDs changed is taken again. A hand-held phone drifts - about 20 px over a capture, against
+   LEDs only 3 px across - so every photo is lined up with the all-on photo before decoding:
+   the drift is measured on the room's own texture where there is any (and on the LEDs
+   otherwise), tracked photo by photo, and taken out with an affine fit that also removes the
+   roll from aiming up at the piece. *The phone moved* is only reported when the two all-on
+   photos, start and end, no longer match after that.
 5. **Check the capture**: the photo with a dot on every LED found, coloured by port, and a
    table per port:
 
@@ -513,11 +518,18 @@ shows the addresses, where HTTPS is listening, and why it is off if it is:
   --force`) and restart; the panel warns when the machine's IP is missing from it.
 - Use the address the panel shows, with the `https://` (typing it without now redirects).
 
-Lit rooms: mapping works with the lights on. Each capture is read both by brightness and by
-the LEDs' green colour (white walls, grey concrete and copper tinsel aren't green, however
-bright), and the better result is kept. A darker room still finds more LEDs, and shiny
-surfaces near the LEDs (tinsel) reflect their light; the phone shows how bright it measures
-the room.
+Lit rooms: mapping works with the lights on, and the room light helps as much as it hurts -
+the texture of the walls is what each photo is lined up on. Each capture is read both by
+brightness and by the LEDs' green colour (white walls, grey concrete and copper tinsel aren't
+green, however bright), and the better result is kept - "better" counts how many neighbouring
+LEDs landed a plausible distance apart, not how many were found, because a bad decode finds
+plenty by scattering them anywhere.
+
+Shiny surfaces near the LEDs (tinsel) scatter their light over the whole piece: with half the
+LEDs lit at once, most of the raw brightness at an LED's own position is other LEDs' light
+coming back off the prop. Every decision is therefore made on the band-passed picture (an
+LED's dot minus the ring around it), where that smooth glow cancels and the LED's own light is
+what is left. The phone shows how bright it measures the room.
 
 Tips: keep the phone still; that matters more than anything else. The
 wait after each pattern is measured per capture (camera lag x 1.3); if the result shows many

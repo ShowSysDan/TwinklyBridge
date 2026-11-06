@@ -4,6 +4,66 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.12.0] - 2026-11-06
+
+Camera mapping: the decoder rewritten. Measured on a real 1,250-LED capture (a tinsel star in
+a lit warehouse, photographed hand-held), the same photos that previously produced 457 "found"
+LEDs of which only about 200 were really placed now produce **430 placed correctly**: the
+measured LED pitch comes out at the piece's true 41 px instead of a meaningless 46.7, and the
+share of neighbouring LEDs sitting a plausible distance apart goes from 0.37 to 0.96.
+
+- **Every decision is made on the band-passed picture, not the raw pixel.** Tinsel scatters
+  each LED's light over the whole piece, so with half the LEDs lit at once most of the
+  brightness at an LED's own position is other LEDs' light: measured, an LED supplies only
+  ~27% of the raw level at its own core. A top-hat (the 3 px core minus the ring around it)
+  cancels that smooth glow, after which ~90% of what is left is the LED's own light.
+- **LEDs are found first, then decoded.** The old "every pixel brighter than 30" mask selected
+  17.5% of a lit-room frame - the dots plus the glow over all the tinsel plus every edge in
+  the room - which was useless as a spot list and useless to line photos up on. Spots are now
+  local maxima of the top-hat, with a self-calibrating threshold that holds in a dark room and
+  in a lit warehouse.
+- **Drift is measured properly and taken out with an affine fit.** The old alignment scored a
+  shift by how bright the LEDs were under it, which slides every pattern onto its own lit
+  subset; it reported "drift 0" on a capture that had drifted 22 px and corrected nothing.
+  Photos are now matched band-passed against the all-on photo, on the room's own static
+  texture where there is any, tracked photo by photo (a hand wanders ~4 px between photos, so
+  each is searched around the last), and corrected with an affine fit from a 4x6 grid of block
+  re-estimates - which also removes the few tenths of a degree of roll from aiming up at a
+  piece. A plain translation leaves up to 7 px across the frame and loses about 45% of the LEDs.
+- **The code is read as a whole word, not eleven separate bits.** Only 1,250 of the 2,048
+  possible 11-bit words are real LEDs, so each spot is matched against all of them; a bit that
+  came out marginal is corrected instead of throwing the LED away.
+- **"The phone moved" no longer cries wolf.** It compared the all-on photos from the start and
+  end of the capture raw, so 25 seconds of the phone's own auto-white-balance drift read as
+  movement. It is now a gain-invariant correlation of the band-passed photos at the LEDs,
+  after alignment: it reports movement the alignment could not undo, which is the only kind
+  that matters.
+- **The live aim view no longer hides the camera picture.** It painted every pixel that
+  brightened by 25 solid green, which on a tinsel piece is 19% of the preview held still and
+  up to 47% in the hand (a bright edge enters the 2-second window at one place and leaves at
+  another) - the reported "the camera display just disappears". It now rings each LED it finds:
+  a few hundred small markers, a few percent of the picture, with a hard ceiling on how much
+  can ever be drawn. The aim canvas went from 320 to 480 px wide so 3 px dots can be found at all.
+- **The wait after each pattern is measured from the right moment.** `cameraLag()` started its
+  stopwatch after the HTTP round trip, but the bridge starts sending the new frame while the
+  request is still in flight, so the lag came out short by however long the round trip took and
+  any later pattern with a faster round trip was photographed before it appeared. The lag is
+  now timed from before the request, and the wait counts from the request too, so a varying
+  round trip cannot eat it.
+- **The synthetic camera in the tests is now physically faithful**, which is why none of the
+  above was caught earlier: it placed LEDs 2.2 px apart in a straight line with no scattered
+  glow, a scene that made "find the dots first" look like it merged neighbours and made
+  alignment look unnecessary. It now uses the measured geometry of a real draped string (~20 px
+  along the wire, ~6 px to the nearest LED on the next fold, irregular), a glow pedestal
+  calibrated to the measured ~30% own-share, camera roll, a continuous drift instead of
+  independent per-frame jumps, and a room that moves with the camera. New cases cover a
+  hand-held phone in a lit room and in the dark.
+- Known limit, recorded as an expected failure in the tests: a blacked-out room, hand-held,
+  with LEDs that show no bloom at all. There is then nothing to line the photos up on but the
+  LEDs themselves, and a coding photo lights only half of them, so a shift that maps the string
+  onto itself scores as well as the true one. Any room light, or any bloom, resolves it; the
+  result degrades visibly rather than producing a confident wrong map.
+
 ## [0.11.2] - 2026-11-05
 
 LEDs not lighting for test patterns or mapping:
