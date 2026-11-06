@@ -58,6 +58,17 @@
     <p class="hint" id="camState"></p>
     <button id="resumeAim" class="big" hidden>Resume the live view (blinks the LEDs)</button>
     <p class="hint" id="aimInfo">The LEDs blink while you aim: green on the picture = LEDs the camera sees, red = too bright (clipped).</p>
+    <label class="row">How far round can you walk?
+      <select id="arc">
+        <option value="315" selected>All the way round</option>
+        <option value="250">Three quarters</option>
+        <option value="180">Half way</option>
+        <option value="120">A quarter</option>
+      </select></label>
+    <p class="hint">The guided walk spreads its views over the part you can reach, instead of
+      stopping half way round a circle it assumed. Hold the phone level with the middle of the
+      piece: if you can't raise it that high, stand further back - the tilt is an angle, so twice
+      the distance is half the tilt.</p>
     <label class="checkrow"><input type="checkbox" id="autoSend" checked><span>Send the photos to the bridge after each capture</span></label>
   </div>
   <div class="mobbar" id="camButtons">
@@ -70,9 +81,9 @@
     <button id="stopGuideBtn" class="big">Stop</button>
     <button id="hereBtn" class="big" hidden>I'm there</button>
   </div>
-  <p class="hint center">Walk around: the phone captures a view, tells you to walk about 45&deg; to your right,
-    and captures again by itself when you're there, upright and still, all the way round; then builds the 3D map.
-    For a flat piece, <em>Capture one view</em> is enough.</p>
+  <p class="hint center" id="guideHint">Walk around: the phone captures a view, tells you how far to walk to your
+    right, and captures again by itself when you're there, upright and still, until it has been all the way round
+    the part you can reach; then builds the 3D map. For a flat piece, <em>Capture one view</em> is enough.</p>
 </section>
 
 <section id="result" hidden>

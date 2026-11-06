@@ -230,3 +230,24 @@ def test_step_sets_the_coding_level(bridge, mock):
         assert mock.state.last_frame[1] == 255                                     # clamped
     finally:
         client.post("/api/mapping/stop")
+
+
+def test_the_guided_walk_plans_over_the_arc_you_can_reach():
+    """The walk used to take 8 views 45 degrees apart whatever the piece or the room allowed,
+    so someone who could only get three quarters of the way round stopped half way through the
+    plan. It now spreads its views over the arc the user says they can walk, never asking for
+    more than that, and keeps them off the angles where a flat piece is edge-on to the camera
+    and gives up about half its LEDs (90 and 270 degrees)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "guide_plan.js"),
+                          os.path.join(ROOT, "bridge", "static", "js", "mapping.js")],
+                         capture_output=True, text=True, timeout=60, check=True)
+    plans = json.loads(out.stdout)
+    assert set(plans) == {"315", "250", "180", "120"}
+    for arc, p in plans.items():
+        assert p["span"] <= int(arc)                   # never further than they said they can go
+        assert p["span"] >= int(arc) - 2 * p["step"]   # and most of the way round it
+        assert p["edgeOn"] == 0 and len(p["angles"]) == 8
+    assert plans["315"]["step"] != 45                  # the old plan put two of eight views edge-on

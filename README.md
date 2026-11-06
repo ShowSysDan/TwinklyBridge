@@ -482,17 +482,38 @@ port's real string length and checks its colour order.
    view, **blue** in earlier views, **red** not found yet.
    **Walk around (guided)** does steps 4 to 8 by itself for a 3D piece: it captures and keeps
    a view, then directs you round with the compass and tilt sensor ("Walk to your right: 28
-   of 45 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
+   of 42 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
    once the phone is at the next angle, upright and still; after eight views (or *Finish &
    build*) it builds the map. The phone must stand still while each view is captured (about
    16 s after the first), because each LED's number is read from the same pixels across about
    25 photos. Without a compass it asks you to tap *I'm there* at each stop.
-7. Or by hand: for a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
+
+   Tell it **how far round you can walk** first. It always takes eight views and spreads them
+   over that arc, rather than stepping 45 degrees round a circle it assumed and leaving you
+   stranded part way through: on the 3D test rig, eight views over the arc actually reachable
+   beat the same eight views from a plan abandoned early, and the number of views matters more
+   than how far round they go (eight beat six beat four at every arc). It also keeps the stops
+   off 90 and 270 degrees, where a flat piece is edge-on to the camera and gives up about half
+   its LEDs. It says what the next view is likely to add, so you can decide when to stop, and
+   warns if a view has almost nothing in common with the others - views have to overlap to be
+   tied together, so if you jump to the far side there is nothing to join it to.
+7. Or by hand: for a 3D piece, **walk about 40 degrees further round to your right**, keeping the same
    distance and height, point the phone at the middle of the piece again and *Capture another
    view*; repeat until little red is left. The angle fills itself in from the phone's compass
-   (heading change since the first view) and can be typed or picked instead. 8 views all
-   round is best (they also correct a compass that is a few degrees out); 4 is the minimum.
-   For a flat piece one view is enough; more views from the front just fill gaps.
+   (heading change since the first view) and can be typed or picked instead. 8 views spread
+   over as much of the way round as you can get is best (they also correct a compass that is a
+   few degrees out); 4 is the minimum, and 6 places about four times fewer LEDs on the wrong
+   side of the piece than 4 does. For a flat piece one view is enough; more views from the
+   front just fill gaps.
+
+   Hold the phone **level with the middle of the piece**. Chest height three metres from a
+   star whose centre is at 2.2 m is 13 degrees of elevation, and ten degrees of it roughly
+   doubles the error on a flat piece. If you cannot raise the phone that high, stand further
+   back: the elevation is an angle, so twice the distance is half the tilt.
+
+   About **a third of the LEDs are never photographed from any angle**, however many views you
+   take - they are buried in the tinsel, not round the back - so walking further does not
+   reach them. They are filled in along their string, and the build page says how many.
 8. **Build map** combines the views: views from about the same direction are fitted onto
    each other (zoom, turn, shift) and averaged (2D); views from different directions give
    each LED's 3D position. An LED seen from two directions is **measured**; one seen from a

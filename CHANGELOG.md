@@ -4,6 +4,42 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.17.0] - 2026-11-06
+
+**The guided walk plans over the arc you can actually reach, and says what it does not know.**
+
+Measured on the 3D ground-truth rig over 78 further view sets (plans crossed with props and
+seeds):
+
+- **Say how far round you can walk** before the guided walk starts - all the way, three
+  quarters, half, a quarter. It always takes eight views and spreads them over that arc
+  instead of stepping 45 degrees round a circle it assumed. The old plan left someone who
+  could only get three quarters of the way round stranded part way through it, and that case
+  measured 7.4 px median error against 5.1 for the same eight views spread over the arc they
+  could reach. The number of views turned out to matter more than how far round they go:
+  eight beat six beat four at every arc (four views put 4.4% of a two-faced star's LEDs on
+  the wrong side, eight put 1.0%), so the arc changes the step, never the count.
+- **The stops now avoid 90 and 270 degrees**, where a flat piece is edge-on to the camera and
+  a view finds about half as many LEDs. All the way round is now eight views 42 degrees apart
+  rather than 45: median error on the rig's two-faced star 6.3 -> 5.1 px, wrong face
+  1.8% -> 1.1%, and 22 more LEDs measured from two angles. A plan stepping a whole 90 degrees
+  is much worse again - 188 LEDs measured from two angles against 436.
+- **"Another view is probably worth about 40 more LEDs"** instead of a running total. The
+  total always goes up, even when you stand still and photograph the same side twice, so it
+  never says whether another view is worth taking.
+- **A view with almost nothing in common with the others is flagged at once**, rather than
+  after a 30-second capture that cannot be tied in: views are joined to each other through the
+  LEDs they share, so jumping to the far side leaves a view floating.
+- **The build page warns** when the kept views only get a short way round (under 100 degrees,
+  where depth barely shows up at all) or when there are fewer than six of them.
+- The page now says up front that **about a third of the LEDs will never be photographed**
+  from any angle - they are buried in the tinsel, and walking further does not reach them -
+  and asks for the phone to be held level with the middle of the piece, since ten degrees of
+  looking up roughly doubles the error on a flat piece.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`.
+
 ## [0.16.0] - 2026-11-06
 
 **The Eos export stops folding a two-faced piece onto itself, and stops unwrapping a flat one.**

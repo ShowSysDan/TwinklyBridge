@@ -792,8 +792,9 @@ $('#keepBtn').onclick = async () => {
     $('#keptText').innerHTML = `${r.new} LEDs new in this view; ${r.views.seen_any} of ${r.views.total} seen so far.` +
       (r.replaced ? '<br><strong class="bad">Earlier views were for other controllers and were discarded.</strong>' : '') +
       `<br><br>The installation now shows <span class="g">green</span>: found in this view, <span class="b">blue</span>: found
-       before, <span class="r">red</span>: not found yet. For a 3D piece, walk about 45&deg; further round to your right
-       (to where you see red) and capture again; then <em>Build map</em>.`;
+       before, <span class="r">red</span>: not found yet. For a 3D piece, walk about ${guideStep(guideArc(), GUIDE.views)}&deg;
+       further round to your right (to where you see red) and capture again; then <em>Build map</em>. Each view has to share
+       LEDs with the one before it, or there is nothing to tie it to.`;
     $('#keptReport').innerHTML = portTable(r.controllers, true);
   } catch (e) { toast(e.message); $('#keepBtn').disabled = false; }
 };
@@ -803,8 +804,29 @@ $('#keepBtn').onclick = async () => {
 // capture by itself as soon as the phone is at the next angle, upright and steady. Each
 // capture needs the phone still (an LED's number is read from the same pixels across ~25
 // photos), so it walks, stops, holds, walks. Without a compass it asks for a tap instead.
-const GUIDE = {step: 45, views: 8, tol: 9, upright: 12, steadyRot: 10, steadyMs: 1200};
+const GUIDE = {views: 8, minViews: 6, tol: 9, upright: 12, steadyRot: 10, steadyMs: 1200};
 let guide = null;
+// How far to walk between views. The arc is what the user says they can reach, not a circle:
+// on the 3D test rig eight views spread over half a turn are as accurate as eight over a whole
+// one, while eight over a WHOLE turn abandoned part way round are not. The number of views is
+// the stronger lever - eight beat six beat four at every arc - so the arc changes the step, not
+// the count. The step is then nudged so that no view lands square-on to 90 or 270 degrees: a
+// flat piece seen edge-on gives up about half its LEDs, and avoiding it was worth a third of
+// the 3D error on the rig's two-faced star.
+function guideStep(arc, views) {
+  const base = Math.floor(arc / (views - 1));          // never ask for more than the arc given
+  for (let d = 0; d <= 6 && base - d >= 10; d++) {
+    const step = base - d;
+    let edgeOn = false;
+    for (let k = 1; k < views; k++) {
+      const a = ((k * step) % 360 + 360) % 360;
+      if (Math.min(Math.abs(a - 90), Math.abs(a - 270)) < 6) edgeOn = true;
+    }
+    if (!edgeOn) return step;
+  }
+  return Math.max(10, base);
+}
+function guideArc() { return Math.max(60, Math.min(315, parseInt($('#arc').value, 10) || 315)); }
 function gauge(done, target) {
   const pct = Math.max(0, Math.min(100, 100 * done / target));
   return `<div class="gauge"><div style="width:${pct}%"></div></div>`;
@@ -825,7 +847,12 @@ async function runGuided() {
     if (views && views.views.length && !confirm('Add to the views already kept? (Cancel discards them and starts afresh.)')) {
       await api('/api/mapping/views', undefined, 'DELETE'); await loadViews();
     }
-    let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + GUIDE.step) % 360 : 0;
+    guide.step = guideStep(guideArc(), GUIDE.views);
+    say('Starting', `${GUIDE.views} views, about ${guide.step}&deg; apart, over the ${guideArc()}&deg; you can reach.
+         Expect roughly a third of the LEDs never to be photographed from any angle: they are buried in the
+         tinsel, and walking further does not reach them. They get filled in along their string.`);
+    await sleep(3500);
+    let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + guide.step) % 360 : 0;
     let first = !(views && views.views.length);
     let walkCalib = null;                               // measured on this walk's first capture
     while (!guide.stop && !guide.finish) {
@@ -851,16 +878,26 @@ async function runGuided() {
       }
       const r = await keepView();
       guide.kept = r.views.views.length;
+      guide.gains = (guide.gains || []).concat(r.new);
+      const shared = d.stats.found - r.new;                // LEDs this view has in common with the rest
       if ($('#autoSend').checked) {                      // send now, not while the next capture runs
         say('Sending the photos to the bridge ...', '');
         sendPhotos.quiet = true; await sendPhotos(); sendPhotos.quiet = false;
       }
       d.shots = null;                                    // free the photos (iPhone memory)
-      say(`View ${guide.kept} kept: ${r.new} new LEDs`, `${r.views.seen_any} of ${r.views.total} seen so far. On the LEDs: green = this view, blue = before, red = not yet.`);
-      await sleep(1800);
+      // What the NEXT view is likely to add, from how fast the gains are falling off. The
+      // running total always goes up, even when you stand still and photograph the same side
+      // twice, so it is no guide to whether another view is worth taking.
+      const g = guide.gains, next = g.length >= 3 ? Math.round(g[g.length - 1] * g[g.length - 1] / Math.max(1, g[g.length - 2])) : null;
+      say(`View ${guide.kept} kept: ${r.new} LEDs this view had not been seen before`,
+          `${r.views.seen_any} of ${r.views.total} seen so far` + (next !== null ? `; another view is probably worth about ${next}` : '') +
+          `. On the LEDs: green = this view, blue = before, red = not yet.` +
+          (guide.kept > 1 && shared < 30 ? `<br><strong>This view has only ${shared} LEDs in common with the others.</strong>
+             Views have to overlap to be tied together - step back towards where you were.` : ''));
+      await sleep(guide.kept > 1 && shared < 30 ? 4000 : 1800);
       first = false;
-      if (guide.kept >= GUIDE.views || (target + GUIDE.step) % 360 === 0) break;
-      target = (target + GUIDE.step) % 360;
+      if (guide.kept >= GUIDE.views || (target + guide.step) % 360 === 0) break;
+      target = (target + guide.step) % 360;
     }
     if (!guide.stop && views && views.views.length) { $('#guidePanel').hidden = true; await build(); }
   } finally {
@@ -889,13 +926,13 @@ async function walkTo(target) {
       if (!guide || guide.stop || guide.finish) { resolve(false); return; }
       const a = compassAngle();
       if (a === null) {
-        say(`Walk about ${GUIDE.step}&deg; to your right`, 'keep pointing at the middle, same distance and height, then tap <em>I\'m there</em> (no compass on this phone)');
+        say(`Walk about ${guide.step}&deg; to your right`, 'keep pointing at the middle, level with its centre, same distance, then tap <em>I\'m there</em> (no compass on this phone)');
         $('#hereBtn').hidden = false;
         setTimeout(tick, 300);
         return;
       }
       $('#hereBtn').hidden = true;
-      const prevTarget = (target - GUIDE.step + 360) % 360;
+      const prevTarget = (target - guide.step + 360) % 360;
       let moved = (a - prevTarget + 360) % 360;
       if (moved > 300) moved -= 360;                               // a little the wrong way
       const off = ((a - target + 540) % 360) - 180;               // + = past the target
@@ -909,9 +946,9 @@ async function walkTo(target) {
       } else {
         steadySince = null;
         if (Math.abs(off) <= GUIDE.tol) say(steady ? 'Hold the phone upright' : 'Hold still', tilt === 'upright' ? '' : tilt);
-        else if (off < 0) say(`Walk to your right: ${Math.max(0, Math.round(moved))}&deg; of ${GUIDE.step}&deg;`,
-                              gauge(moved, GUIDE.step) + `keep pointing at the middle; ${tilt || 'same height'}`);
-        else say(`Too far: step back to your left ${Math.round(off)}&deg;`, gauge(GUIDE.step + off, GUIDE.step) + tilt);
+        else if (off < 0) say(`Walk to your right: ${Math.max(0, Math.round(moved))}&deg; of ${guide.step}&deg;`,
+                              gauge(moved, guide.step) + `keep pointing at the middle, level with its centre; ${tilt || 'same height'}`);
+        else say(`Too far: step back to your left ${Math.round(off)}&deg;`, gauge(guide.step + off, guide.step) + tilt);
       }
       setTimeout(tick, 150);
     };
@@ -930,7 +967,7 @@ $('#stopGuideBtn').onclick = async () => {
 $('#moreBtn').onclick = () => {
   const n = views.views.length;
   angleTouched = false;
-  $('#angle').value = compassAngle() ?? (Math.round(views.views[n - 1].angle) + 45) % 360;
+  $('#angle').value = compassAngle() ?? (Math.round(views.views[n - 1].angle) + guideStep(guideArc(), GUIDE.views)) % 360;
   $('#runBtn').disabled = false; $('#progressWrap').hidden = true; openCamera();
 };
 
@@ -947,6 +984,13 @@ async function build() {
   $('#pvTop').parentElement.hidden = !three;
   const total = st.multi_view + st.single_view + st.unseen;
   const clamped = built.views.filter(v => v.clamped).length;
+  // How far round the piece the kept views actually got: a full turn less the biggest gap
+  // between neighbouring angles. Under about 100 degrees the depth is barely constrained -
+  // on the test rig's two-faced star, views spread over 60 degrees put LEDs out by ten times
+  // as much as views over 120.
+  const angs = built.views.map(v => (v.refined_angle % 360 + 360) % 360).sort((a, b) => a - b);
+  const gaps = angs.map((a, i) => (i ? a - angs[i - 1] : a + 360 - angs[angs.length - 1]));
+  const arc = Math.round(360 - Math.max(...gaps));
   // Lead with what was NOT measured. The count of LEDs seen from several angles goes up when
   // you stand still and take the same photo twice, so it is a bad headline; what matters is
   // how much of the map is a guess, because that is where every front/back mistake lives.
@@ -957,6 +1001,12 @@ async function build() {
           : `${st.multi_view} LEDs seen in more than one view, ${st.unseen} not seen (filled in along their string).`,
     three && built.views.length <= 2 ? `Only two views: an LED seen in both is still only seen from one side of the
              piece, so "measured" here does not yet mean front and back are told apart. Walk further round.` : '',
+    three && built.views.length > 2 && arc < 100 ? `<span class="warn">These views only get ${arc}&deg; round the
+             piece. Depth hardly shows up over so narrow an arc: take more views further round before trusting
+             this map, or export it flat.</span>` : '',
+    three && built.views.length > 2 && built.views.length < GUIDE.minViews ? `<span class="warn">Only
+             ${built.views.length} views. Six or more place about four times fewer LEDs on the wrong side of
+             the piece.</span>` : '',
     three ? `Angles used: ${built.views.map(v => `${v.angle}&deg;${Math.abs(v.refined_angle - v.angle) >= 1 ? ` (&rarr; ${v.refined_angle}&deg;)` : ''}`).join(', ')}.` : '',
     clamped ? `<span class="warn">${clamped === 1 ? 'One view did' : clamped + ' views did'} not fit the angle you gave,
              even after moving it the full 15&deg;. A compass reads badly near metal: re-run and type the angles
