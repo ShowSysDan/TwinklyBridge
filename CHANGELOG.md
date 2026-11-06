@@ -4,6 +4,14 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.12.4] - 2026-11-06
+
+- **Each photo is lined up once during a capture instead of three times.** The check for a
+  photo taken before the LEDs changed lined the photo up with the all-on photo inside a
+  condition that was evaluated twice, and then lined the same photo up again to keep as the
+  next photo's reference. Lining one up costs about 30 ms, and there are 27 of them: measured,
+  that was more time than the whole final decode. Same check, same threshold, one alignment.
+
 ## [0.12.3] - 2026-11-06
 
 Capture time. Measured end to end, most of a capture is not photography or arithmetic: it is

@@ -561,7 +561,7 @@ async function captureView(ids, angle, reuse) {
     log.locked = await lockCamera(shots.white);
     await sleep(150);
     const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
-    let prev = shots.white, prevAligned = shots.white.lum, L = null;
+    let prev = shots.white, prevAligned = shots.white.lum, L = null, aligned = null;
     for (let i = 0; i < order.length; i++) {
       if (cancelled) throw new Error('Stopped.');
       const step = order[i];
@@ -571,6 +571,7 @@ async function captureView(ids, angle, reuse) {
       await waitAfterStep(sent, settle);
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
       let shot = await grab(step === 'black' ? 4 : 2, colour);
+      aligned = null;
       // a photo that hardly differs from the last one was taken before the LEDs changed
       // (camera lag): wait and take it again. Compared lined up with the all-on photo, so a
       // drifting hand doesn't make a stale photo look new.
@@ -580,17 +581,21 @@ async function captureView(ids, angle, reuse) {
         // balance drifting over a 25 s capture cannot read as "the pattern changed" (nor hide
         // that it did not). Measured on a real capture: a genuine change between consecutive
         // patterns scores 0.15 at worst, a photo of the previous pattern scores 0.00.
-        const same = s => MapDecode.changeAt(MapDecode.alignedLum(s.lum, s.W, s.H, L), prevAligned, s.W, s.H, L) < 0.08;
-        for (let tries = 0; tries < 4 && same(shot); tries++) {
-          log.retakes[step] = tries + 1;
+        // Lining a photo up costs ~30 ms, so do it once per photo and reuse it: for the
+        // staleness test now, and as the reference for the next photo's test.
+        aligned = MapDecode.alignedLum(shot.lum, shot.W, shot.H, L);
+        let tries = 0;
+        while (MapDecode.changeAt(aligned, prevAligned, shot.W, shot.H, L) < 0.08) {
+          if (tries >= 4)
+            throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
+          log.retakes[step] = ++tries;
           await sleep(settle / 2);
           shot = await grab(2, colour);
+          aligned = MapDecode.alignedLum(shot.lum, shot.W, shot.H, L);
         }
-        if (same(shot))
-          throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
       }
       shots[step] = prev = shot;
-      prevAligned = shots.black && L ? MapDecode.alignedLum(shot.lum, shot.W, shot.H, L) : shot.lum;
+      prevAligned = aligned || shot.lum;
       if (step === 'black') {
         // LEDs on vs off must differ somewhere (by brightness or by green-ness); if not, the
         // camera isn't seeing them (frozen, covered, pointing elsewhere): stop now rather than
