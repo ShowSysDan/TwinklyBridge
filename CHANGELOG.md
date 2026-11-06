@@ -4,6 +4,13 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.13.1] - 2026-11-06
+
+- The camera page says what the per-pattern wait actually is now (the round trip to the bridge
+  plus the camera's lag with a margin, counted from sending the pattern), and says to connect
+  the phone directly rather than through a VPN - measured, every 100 ms of round trip costs
+  about 3 s on a 1,250-LED capture, and it is the largest single item in one.
+
 ## [0.13.0] - 2026-11-06
 
 - **Mapping now works hand-held in a dark room too, and lining the photos up got faster.** The
