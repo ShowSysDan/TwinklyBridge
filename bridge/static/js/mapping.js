@@ -135,7 +135,7 @@ async function openCamera() {
 // green where the camera sees LEDs and red where they are clipped (too bright: bloom), and
 // warns when LEDs reach the edge of the picture (some are probably out of frame). It doesn't
 // count LEDs: at this size neighbouring LEDs merge, so a count would be badly low.
-const AIM_W = 320;
+const AIM_W = 480;
 const aim = {on: false, ring: [], blinkLevel: 255, session: null, started: 0};
 const AIM_IDLE_MS = 120000;           // the live view hands the LEDs back after 2 minutes
 const aimCanvas = document.createElement('canvas');
@@ -217,31 +217,38 @@ async function aimLook() {
       if (f.top[p] > peak[p]) peak[p] = f.top[p];
     }
     cv.width = W; cv.height = H;
-    const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
-    let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
     const room = roomLevel(lo);
     const mx = Math.max(2, Math.round(W * 0.02)), my = Math.max(2, Math.round(H * 0.02));
-    const amp = new Int16Array(N);
-    for (let p = 0; p < N; p++) {
-      amp[p] = hi[p] - lo[p];
-      if (amp[p] < 25) continue;
-      lit++;
-      const clip = peak[p] >= 250;
+    // Mark the LEDs, do not paint them. The old overlay filled every pixel that brightened by
+    // 25, which on a tinsel prop in a lit room is a fifth of the picture standing still and
+    // nearly half of it in the hand (a bright edge enters the 2 s window at one place and
+    // leaves at another), so the preview vanished under a green slab. The LEDs are ~3 px dots:
+    // find them with the same top-hat the decoder uses and ring each one. A ring per LED can
+    // cover at most a few percent of the picture however much the hand shakes.
+    const amp = new Float32Array(N);
+    for (let p = 0; p < N; p++) amp[p] = hi[p] - lo[p];
+    const spots = MapDecode.findSpots(amp, W, H, 'auto').spots;
+    let lit = 0, clipped = 0, edge = 0, bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    ctx.lineWidth = 1;
+    for (const sp of spots) {
+      if (++lit > 1200) break;                        // a hard ceiling on what can be drawn
+      const p = sp.y * W + sp.x, clip = peak[p] >= 250;
       if (clip) clipped++;
-      const x = p % W, y = (p / W) | 0;
-      if (x < mx || y < my || x >= W - mx || y >= H - my) edge++;
-      if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
-      img.data[4 * p] = clip ? 255 : 0; img.data[4 * p + 1] = clip ? 40 : 255; img.data[4 * p + 2] = 60;
-      img.data[4 * p + 3] = 170;
+      if (sp.x < mx || sp.y < my || sp.x >= W - mx || sp.y >= H - my) edge++;
+      if (sp.x < bx0) bx0 = sp.x; if (sp.x > bx1) bx1 = sp.x;
+      if (sp.y < by0) by0 = sp.y; if (sp.y > by1) by1 = sp.y;
+      ctx.strokeStyle = clip ? 'rgba(255, 60, 40, 0.95)' : 'rgba(40, 255, 90, 0.95)';
+      ctx.strokeRect(sp.x - 2.5, sp.y - 2.5, 5, 5);
     }
-    ctx.putImageData(img, 0, 0);
     if (bx1 >= 0) {                                    // the edges of the lights: a box round them
       ctx.strokeStyle = 'rgba(255, 200, 0, 0.9)'; ctx.lineWidth = 1.5;
-      ctx.strokeRect(bx0 - 2, by0 - 2, bx1 - bx0 + 4, by1 - by0 + 4);
+      ctx.strokeRect(bx0 - 3, by0 - 3, bx1 - bx0 + 6, by1 - by0 + 6);
     }
     const share = lit ? Math.round(100 * clipped / lit) : 0;
     const aimMsg = !lit ? '<strong class="bad">No LEDs seen yet: point the camera at the installation.</strong>'
-      : `LEDs seen (green, inside the yellow box), ${share}% of them clipped (red).` +
+      : `${lit} LEDs seen (green rings, inside the yellow box), ${share}% of them clipped (red).` +
         (edge > 3 ? ' <span class="bad">LEDs reach the edge of the picture: step back or zoom out so all of it is in frame.</span>' : ' All inside the frame.') +
         (share > 25 ? ' <span class="bad">Very bright: the capture will dim the LEDs to suit; you could also step back.</span>' : '');
     const roomMsg = roomWarning(room);
@@ -382,6 +389,18 @@ async function settled(max = 4000) {
   }
   return prev;
 }
+// Wait until `settle` ms after the step was ISSUED. The LEDs change partway through the round
+// trip, so counting from the reply makes the real wait depend on how long the network took.
+// Every step's round trip, so a capture that ran slow can be explained afterwards instead of
+// guessed at: the one round trip cameraLag() measures is a single sample of the biggest single
+// line item in a capture.
+let stepRoundTrips = [];
+function waitAfterStep(sent, settle) {
+  const rt = performance.now() - sent;
+  stepRoundTrips.push(Math.round(rt));
+  return sleep(Math.max(40, settle - rt));
+}
+
 async function cameraLag(sessionId) {
   // the LEDs went dark at start; the camera shows it some unknown time later, and until then
   // its picture is just as still, so first give it longer than any phone's lag
@@ -396,6 +415,12 @@ async function cameraLag(sessionId) {
   if (lit < 40 * dark.length / 21600)          // about two LEDs' worth at 240 x 90
     throw new Error('The camera sees no change when the LEDs come on: point it at the installation, darken the room, and check the controllers are ticked.');
   const reach = samples.find(s => s[1] >= 0.9 * lit);
+  // `ms` is the camera's own lag, measured from the reply; `roundTrip` is kept beside it
+  // because the two are spent differently. The bridge starts sending the new frame while the
+  // request is still in flight, so the wait has to be counted from the REQUEST (see the
+  // capture loop) or a later step whose round trip comes back faster photographs the previous
+  // pattern. But only the camera's lag deserves a safety factor: multiplying the round trip
+  // too would add a third of it to the wait for every pattern, for nothing.
   return {ms: Math.round(reach[0]), roundTrip: Math.round(t1 - t0)};
 }
 // Pick the LED level for the coding patterns from what the camera sees. Dimming LEDs is PWM
@@ -405,14 +430,16 @@ async function cameraLag(sessionId) {
 // sensor's maximum. Take the brightest level that doesn't flicker and hardly clips.
 const LEVELS = [255, 160, 96, 56, 32];
 async function chooseLevel(sessionId, settle) {
+  let sent = performance.now();
   await api('/api/mapping/step', {session: sessionId, step: 'black'});
-  await sleep(settle);
+  await waitAfterStep(sent, settle);
   const dark = await grab(2, true);
   const tried = [];
   let mask = null, spots = null;                       // where the LEDs are (for lining photos up)
   for (const L of LEVELS) {
+    sent = performance.now();
     await api('/api/mapping/step', {session: sessionId, step: 'white', level: L});
-    await sleep(settle);
+    await waitAfterStep(sent, settle);
     const a0 = await grab(1, true);
     await sleep(70);
     const b0 = await grab(1, true);
@@ -505,6 +532,7 @@ async function captureView(ids, angle, reuse) {
   const minWait = Math.max(50, +$('#settle').value || 300);
   const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle};
   const log = {retakes: {}, started: new Date().toISOString(), ua: navigator.userAgent};
+  stepRoundTrips = [];
   try {
     progress(0, 1, 'Taking over the controllers ...');
     session = await api('/api/mapping/start', {ids, level: +$('#level').value});
@@ -517,7 +545,7 @@ async function captureView(ids, angle, reuse) {
     } else {
       progress(0, 1, 'Timing the camera ...');
       lag = await cameraLag(session.session);
-      settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
+      settle = Math.max(minWait, lag.roundTrip + Math.round(lag.ms * 1.3) + 60);
       progress(0, 1, 'Choosing the LED level ...');
       level = await chooseLevel(session.session, settle);
     }
@@ -525,38 +553,49 @@ async function captureView(ids, angle, reuse) {
     log.lag = lag; log.settle = settle; log.level = level; log.reused = !!reuse;
     aim.blinkLevel = level.level;
     // all-on first at that level: let exposure settle on the LEDs, then lock it (where allowed)
+    const sentWhite = performance.now();
     await api('/api/mapping/step', {session: session.session, step: 'white', level: level.level});
-    await sleep(settle);
+    await waitAfterStep(sentWhite, settle);
     const shots = {};
     shots.white = await grab(4, true);
     log.locked = await lockCamera(shots.white);
     await sleep(150);
     const order = ['black', ...session.steps.filter(s => s !== 'black' && s !== 'white')];
-    let prev = shots.white, prevAligned = shots.white.lum, L = null;
+    let prev = shots.white, prevAligned = shots.white.lum, L = null, aligned = null;
     for (let i = 0; i < order.length; i++) {
       if (cancelled) throw new Error('Stopped.');
       const step = order[i];
       progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}`);
+      const sent = performance.now();
       await api('/api/mapping/step', {session: session.session, step});
-      await sleep(settle);
+      await waitAfterStep(sent, settle);
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
       let shot = await grab(step === 'black' ? 4 : 2, colour);
+      aligned = null;
       // a photo that hardly differs from the last one was taken before the LEDs changed
       // (camera lag): wait and take it again. Compared lined up with the all-on photo, so a
       // drifting hand doesn't make a stale photo look new.
       if (shots.black && step !== 'black') {
         L = L || MapDecode.lights(shots.white.lum, shots.black.lum, shots.white.W, shots.white.H);
-        const same = s => MapDecode.change(MapDecode.alignedLum(s.lum, s.W, s.H, L), prevAligned, shots.white.lum, shots.black.lum) < 0.12;
-        for (let tries = 0; tries < 4 && same(shot); tries++) {
-          log.retakes[step] = tries + 1;
+        // Compared band-passed and only at the LEDs, so the phone's own exposure and white
+        // balance drifting over a 25 s capture cannot read as "the pattern changed" (nor hide
+        // that it did not). Measured on a real capture: a genuine change between consecutive
+        // patterns scores 0.15 at worst, a photo of the previous pattern scores 0.00.
+        // Lining a photo up costs ~30 ms, so do it once per photo and reuse it: for the
+        // staleness test now, and as the reference for the next photo's test.
+        aligned = MapDecode.alignedLum(shot.lum, shot.W, shot.H, L);
+        let tries = 0;
+        while (MapDecode.changeAt(aligned, prevAligned, shot.W, shot.H, L) < 0.08) {
+          if (tries >= 4)
+            throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
+          log.retakes[step] = ++tries;
           await sleep(settle / 2);
           shot = await grab(2, colour);
+          aligned = MapDecode.alignedLum(shot.lum, shot.W, shot.H, L);
         }
-        if (same(shot))
-          throw new Error(`The camera isn't keeping up (pattern ${step} never showed). Raise "Wait after each pattern" and try again.`);
       }
       shots[step] = prev = shot;
-      prevAligned = shots.black && L ? MapDecode.alignedLum(shot.lum, shot.W, shot.H, L) : shot.lum;
+      prevAligned = aligned || shot.lum;
       if (step === 'black') {
         // LEDs on vs off must differ somewhere (by brightness or by green-ness); if not, the
         // camera isn't seeing them (frozen, covered, pointing elsewhere): stop now rather than
@@ -572,7 +611,9 @@ async function captureView(ids, angle, reuse) {
     progress(order.length + 1, order.length + 1, 'Steadying the photos ...');
     await sleep(30);
     // line every photo up with the all-on one: hand-held drift is undone before decoding
-    const st = MapDecode.stabilise(shots);
+    const rts = stepRoundTrips.slice().sort((a, b) => a - b);
+    if (rts.length) log.roundTrips = {n: rts.length, min: rts[0], median: rts[rts.length >> 1], max: rts[rts.length - 1]};
+    const st = MapDecode.stabilise(shots, {order: Object.keys(shots)});
     log.stabilise = {drift: st.drift, unaligned: st.unaligned, shifts: st.shifts, box: st.box};
     log.room = roomLevel(shots.black.lum);
     progress(order.length + 1, order.length + 1, 'Working it out ...');
@@ -625,9 +666,13 @@ function stopCamera() {
 
 // ---------------------------------------------------------------- one capture's result
 function portTable(rep, sofar) {
+  // "Seen" counts every LED the camera found; "Guessed" is the rest of the string, put where
+  // the wire must have gone. "Run" is the longest stretch with no measurement in it at all -
+  // the honest measure of how much of a port is standing on an assumption.
   return rep.map(c => `<h3>${esc(c.name)}: ${c.found} seen${sofar ? ' so far' : `, ${c.filled} to fill`}</h3>
-    <table class="rep"><tr><th>Port</th><th>Set</th><th>Seen</th><th>${sofar ? 'Last seen' : 'Ends at'}</th><th>Colours</th><th></th></tr>
+    <table class="rep"><tr><th>Port</th><th>Set</th><th>Seen</th><th>Guessed</th><th>Run</th><th>${sofar ? 'Last seen' : 'Ends at'}</th><th>Colours</th><th></th></tr>
     ${c.ports.map(p => `<tr class="${p.ok ? '' : 'warn'}"><td>${p.port}</td><td>${p.configured}</td><td>${p.found}</td>
+      <td>${(p.estimated || 0) + (p.never_seen || 0)}</td><td>${p.longest_unmeasured_run || 0}</td>
       <td>${p.last_seen || '-'}</td><td>${esc(p.colour_order || '?')}</td><td>${p.ok ? 'OK' : esc(p.notes.join('; '))}</td></tr>`).join('')}
     </table>`).join('');
 }
@@ -658,7 +703,15 @@ function showResult() {
     roomWarning(decoded.log.room).replace('<br>', ''),
     decoded.meta.drift >= 1 ? `The phone drifted up to ${decoded.meta.drift} px during the capture; the photos were lined up again.` : '',
     decoded.meta.pitch !== null && Math.abs(decoded.meta.pitch) > 15 ? `<strong class="bad">The phone was tilted ${Math.round(decoded.meta.pitch)}&deg;: for 3D, hold it upright.</strong>` : '',
-    s.found < s.total * 0.5 ? '<strong class="bad">Less than half found: darken the room, get everything in frame, raise the brightness.</strong>' : '',
+    // The honest quality number. A bad decode can "find" plenty of LEDs by scattering them
+    // anywhere, and the count alone looks fine when it does; what gives it away is that LEDs
+    // next to each other on the string no longer land next to each other in the picture.
+    s.inBand !== undefined && s.found > 20
+      ? (s.inBand >= 0.85
+          ? `<strong>${Math.round(s.inBand * 100)}% of LEDs landed next to the one before them on the string</strong> (spacing ${s.stepPx} px): this capture reads cleanly.`
+          : `<strong class="bad">Only ${Math.round(s.inBand * 100)}% of LEDs landed next to the one before them on the string.</strong> Many of the ${s.found} found are in the wrong place, whatever the count says. Get the whole piece in frame, hold the phone still, and send the photos to the bridge if it keeps happening.`)
+      : '',
+    s.found < s.total * 0.3 ? '<strong class="bad">Less than a third found: get everything in frame and raise the brightness. One view only ever sees the LEDs facing the camera, so capture more sides.</strong>' : '',
     'Each string runs red &rarr; yellow &rarr; green &rarr; blue &rarr; violet from its first LED: a right string is one smooth rainbow; a dot in the wrong colour is a misread LED.',
     `Camera lag ${decoded.log.lag.ms} ms, waited ${decoded.log.settle} ms per pattern` +
       (Object.keys(decoded.log.retakes).length ? `, ${Object.keys(decoded.log.retakes).length} photos retaken` : '') +
@@ -673,12 +726,16 @@ function showResult() {
   $('#sendBtn').disabled = false; $('#sendBtn').textContent = 'Send photos to the bridge';
 }
 // Send this capture's photos to the bridge (instance/captures/), to look at what the camera saw.
-function jpegOf(shot) {
+// One photo as a JPEG. `plane` writes a single measurement (green-ness) as a grey picture
+// instead of the camera's colour.
+function jpegOf(shot, plane) {
   const cv = document.createElement('canvas'); cv.width = shot.W; cv.height = shot.H;
   const ctx = cv.getContext('2d'), img = ctx.createImageData(shot.W, shot.H);
   for (let p = 0; p < shot.W * shot.H; p++) {
-    img.data[4 * p] = shot.r ? shot.r[p] : shot.lum[p]; img.data[4 * p + 1] = shot.g ? shot.g[p] : shot.lum[p];
-    img.data[4 * p + 2] = shot.b ? shot.b[p] : shot.lum[p]; img.data[4 * p + 3] = 255;
+    const r = plane ? plane[p] : shot.r ? shot.r[p] : shot.lum[p];
+    const g = plane ? plane[p] : shot.g ? shot.g[p] : shot.lum[p];
+    const b = plane ? plane[p] : shot.b ? shot.b[p] : shot.lum[p];
+    img.data[4 * p] = r; img.data[4 * p + 1] = g; img.data[4 * p + 2] = b; img.data[4 * p + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
   return new Promise(res => cv.toBlob(res, 'image/jpeg', 0.92));      // ~1/10 of a PNG
@@ -689,11 +746,22 @@ async function sendPhotos() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + `_${Math.round(decoded.meta.angle)}deg`;
   try {
     if (!decoded.shots) throw new Error('these photos were already sent and cleared');
-    const names = Object.keys(decoded.shots);
-    for (let i = 0; i < names.length; i++) {
-      btn.textContent = `Sending ${i + 1} / ${names.length + 1} ...`;
-      const r = await fetch(`/api/mapping/captures/${stamp}/${names[i]}.jpg`,
-                            {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: await jpegOf(decoded.shots[names[i]])});
+    // The pattern photos are kept as brightness plus green-ness, and only the colour photos
+    // keep red / green / blue. Writing brightness into all three channels of the JPEG would
+    // throw the green-ness away -- and that is the signal most captures are actually decoded
+    // from, so a capture sent for diagnosis could not be re-read the way the phone read it.
+    // Each pattern photo therefore also goes up as <step>_green.jpg. (A second grey JPEG, not
+    // a colour one: JPEG stores colour at half resolution, which would blur a 3 px dot.)
+    const files = [];
+    for (const n of Object.keys(decoded.shots)) {
+      const shot = decoded.shots[n];
+      files.push([`${n}.jpg`, () => jpegOf(shot)]);
+      if (!shot.r && shot.chroma) files.push([`${n}_green.jpg`, () => jpegOf(shot, shot.chroma)]);
+    }
+    for (let i = 0; i < files.length; i++) {
+      btn.textContent = `Sending ${i + 1} / ${files.length + 1} ...`;
+      const r = await fetch(`/api/mapping/captures/${stamp}/${files[i][0]}`,
+                            {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: await files[i][1]()});
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
     }
     const info = {session: session, stats: decoded.stats, log: decoded.log, meta: decoded.meta,
@@ -724,8 +792,9 @@ $('#keepBtn').onclick = async () => {
     $('#keptText').innerHTML = `${r.new} LEDs new in this view; ${r.views.seen_any} of ${r.views.total} seen so far.` +
       (r.replaced ? '<br><strong class="bad">Earlier views were for other controllers and were discarded.</strong>' : '') +
       `<br><br>The installation now shows <span class="g">green</span>: found in this view, <span class="b">blue</span>: found
-       before, <span class="r">red</span>: not found yet. For a 3D piece, walk about 45&deg; further round to your right
-       (to where you see red) and capture again; then <em>Build map</em>.`;
+       before, <span class="r">red</span>: not found yet. For a 3D piece, walk about ${guideStep(guideArc(), GUIDE.views)}&deg;
+       further round to your right (to where you see red) and capture again; then <em>Build map</em>. Each view has to share
+       LEDs with the one before it, or there is nothing to tie it to.`;
     $('#keptReport').innerHTML = portTable(r.controllers, true);
   } catch (e) { toast(e.message); $('#keepBtn').disabled = false; }
 };
@@ -735,8 +804,29 @@ $('#keepBtn').onclick = async () => {
 // capture by itself as soon as the phone is at the next angle, upright and steady. Each
 // capture needs the phone still (an LED's number is read from the same pixels across ~25
 // photos), so it walks, stops, holds, walks. Without a compass it asks for a tap instead.
-const GUIDE = {step: 45, views: 8, tol: 9, upright: 12, steadyRot: 10, steadyMs: 1200};
+const GUIDE = {views: 8, minViews: 6, tol: 9, upright: 12, steadyRot: 10, steadyMs: 1200};
 let guide = null;
+// How far to walk between views. The arc is what the user says they can reach, not a circle:
+// on the 3D test rig eight views spread over half a turn are as accurate as eight over a whole
+// one, while eight over a WHOLE turn abandoned part way round are not. The number of views is
+// the stronger lever - eight beat six beat four at every arc - so the arc changes the step, not
+// the count. The step is then nudged so that no view lands square-on to 90 or 270 degrees: a
+// flat piece seen edge-on gives up about half its LEDs, and avoiding it was worth a third of
+// the 3D error on the rig's two-faced star.
+function guideStep(arc, views) {
+  const base = Math.floor(arc / (views - 1));          // never ask for more than the arc given
+  for (let d = 0; d <= 6 && base - d >= 10; d++) {
+    const step = base - d;
+    let edgeOn = false;
+    for (let k = 1; k < views; k++) {
+      const a = ((k * step) % 360 + 360) % 360;
+      if (Math.min(Math.abs(a - 90), Math.abs(a - 270)) < 6) edgeOn = true;
+    }
+    if (!edgeOn) return step;
+  }
+  return Math.max(10, base);
+}
+function guideArc() { return Math.max(60, Math.min(315, parseInt($('#arc').value, 10) || 315)); }
 function gauge(done, target) {
   const pct = Math.max(0, Math.min(100, 100 * done / target));
   return `<div class="gauge"><div style="width:${pct}%"></div></div>`;
@@ -757,7 +847,12 @@ async function runGuided() {
     if (views && views.views.length && !confirm('Add to the views already kept? (Cancel discards them and starts afresh.)')) {
       await api('/api/mapping/views', undefined, 'DELETE'); await loadViews();
     }
-    let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + GUIDE.step) % 360 : 0;
+    guide.step = guideStep(guideArc(), GUIDE.views);
+    say('Starting', `${GUIDE.views} views, about ${guide.step}&deg; apart, over the ${guideArc()}&deg; you can reach.
+         Expect roughly a third of the LEDs never to be photographed from any angle: they are buried in the
+         tinsel, and walking further does not reach them. They get filled in along their string.`);
+    await sleep(3500);
+    let target = views && views.views.length ? (Math.round(views.views[views.views.length - 1].angle) + guide.step) % 360 : 0;
     let first = !(views && views.views.length);
     let walkCalib = null;                               // measured on this walk's first capture
     while (!guide.stop && !guide.finish) {
@@ -783,16 +878,26 @@ async function runGuided() {
       }
       const r = await keepView();
       guide.kept = r.views.views.length;
+      guide.gains = (guide.gains || []).concat(r.new);
+      const shared = d.stats.found - r.new;                // LEDs this view has in common with the rest
       if ($('#autoSend').checked) {                      // send now, not while the next capture runs
         say('Sending the photos to the bridge ...', '');
         sendPhotos.quiet = true; await sendPhotos(); sendPhotos.quiet = false;
       }
       d.shots = null;                                    // free the photos (iPhone memory)
-      say(`View ${guide.kept} kept: ${r.new} new LEDs`, `${r.views.seen_any} of ${r.views.total} seen so far. On the LEDs: green = this view, blue = before, red = not yet.`);
-      await sleep(1800);
+      // What the NEXT view is likely to add, from how fast the gains are falling off. The
+      // running total always goes up, even when you stand still and photograph the same side
+      // twice, so it is no guide to whether another view is worth taking.
+      const g = guide.gains, next = g.length >= 3 ? Math.round(g[g.length - 1] * g[g.length - 1] / Math.max(1, g[g.length - 2])) : null;
+      say(`View ${guide.kept} kept: ${r.new} LEDs this view had not been seen before`,
+          `${r.views.seen_any} of ${r.views.total} seen so far` + (next !== null ? `; another view is probably worth about ${next}` : '') +
+          `. On the LEDs: green = this view, blue = before, red = not yet.` +
+          (guide.kept > 1 && shared < 30 ? `<br><strong>This view has only ${shared} LEDs in common with the others.</strong>
+             Views have to overlap to be tied together - step back towards where you were.` : ''));
+      await sleep(guide.kept > 1 && shared < 30 ? 4000 : 1800);
       first = false;
-      if (guide.kept >= GUIDE.views || (target + GUIDE.step) % 360 === 0) break;
-      target = (target + GUIDE.step) % 360;
+      if (guide.kept >= GUIDE.views || (target + guide.step) % 360 === 0) break;
+      target = (target + guide.step) % 360;
     }
     if (!guide.stop && views && views.views.length) { $('#guidePanel').hidden = true; await build(); }
   } finally {
@@ -821,13 +926,13 @@ async function walkTo(target) {
       if (!guide || guide.stop || guide.finish) { resolve(false); return; }
       const a = compassAngle();
       if (a === null) {
-        say(`Walk about ${GUIDE.step}&deg; to your right`, 'keep pointing at the middle, same distance and height, then tap <em>I\'m there</em> (no compass on this phone)');
+        say(`Walk about ${guide.step}&deg; to your right`, 'keep pointing at the middle, level with its centre, same distance, then tap <em>I\'m there</em> (no compass on this phone)');
         $('#hereBtn').hidden = false;
         setTimeout(tick, 300);
         return;
       }
       $('#hereBtn').hidden = true;
-      const prevTarget = (target - GUIDE.step + 360) % 360;
+      const prevTarget = (target - guide.step + 360) % 360;
       let moved = (a - prevTarget + 360) % 360;
       if (moved > 300) moved -= 360;                               // a little the wrong way
       const off = ((a - target + 540) % 360) - 180;               // + = past the target
@@ -841,9 +946,9 @@ async function walkTo(target) {
       } else {
         steadySince = null;
         if (Math.abs(off) <= GUIDE.tol) say(steady ? 'Hold the phone upright' : 'Hold still', tilt === 'upright' ? '' : tilt);
-        else if (off < 0) say(`Walk to your right: ${Math.max(0, Math.round(moved))}&deg; of ${GUIDE.step}&deg;`,
-                              gauge(moved, GUIDE.step) + `keep pointing at the middle; ${tilt || 'same height'}`);
-        else say(`Too far: step back to your left ${Math.round(off)}&deg;`, gauge(GUIDE.step + off, GUIDE.step) + tilt);
+        else if (off < 0) say(`Walk to your right: ${Math.max(0, Math.round(moved))}&deg; of ${guide.step}&deg;`,
+                              gauge(moved, guide.step) + `keep pointing at the middle, level with its centre; ${tilt || 'same height'}`);
+        else say(`Too far: step back to your left ${Math.round(off)}&deg;`, gauge(guide.step + off, guide.step) + tilt);
       }
       setTimeout(tick, 150);
     };
@@ -862,7 +967,7 @@ $('#stopGuideBtn').onclick = async () => {
 $('#moreBtn').onclick = () => {
   const n = views.views.length;
   angleTouched = false;
-  $('#angle').value = compassAngle() ?? (Math.round(views.views[n - 1].angle) + 45) % 360;
+  $('#angle').value = compassAngle() ?? (Math.round(views.views[n - 1].angle) + guideStep(guideArc(), GUIDE.views)) % 360;
   $('#runBtn').disabled = false; $('#progressWrap').hidden = true; openCamera();
 };
 
@@ -874,19 +979,43 @@ async function build() {
   show('built');
   const st = built.stats, three = built.mode === 'around';
   $('#builtTitle').textContent = three ? `3D map from ${built.views.length} views` : `Map from ${built.views.length} view${built.views.length > 1 ? 's' : ''}`;
-  drawPreview($('#pvFront'), built.points, 0, 1);
-  drawPreview($('#pvTop'), built.points, 0, 2);
+  drawPreview($('#pvFront'), built.points, 0, 1, built.measured);
+  drawPreview($('#pvTop'), built.points, 0, 2, built.measured);
   $('#pvTop').parentElement.hidden = !three;
+  const total = st.multi_view + st.single_view + st.unseen;
+  const clamped = built.views.filter(v => v.clamped).length;
+  // How far round the piece the kept views actually got: a full turn less the biggest gap
+  // between neighbouring angles. Under about 100 degrees the depth is barely constrained -
+  // on the test rig's two-faced star, views spread over 60 degrees put LEDs out by ten times
+  // as much as views over 120.
+  const angs = built.views.map(v => (v.refined_angle % 360 + 360) % 360).sort((a, b) => a - b);
+  const gaps = angs.map((a, i) => (i ? a - angs[i - 1] : a + 360 - angs[angs.length - 1]));
+  const arc = Math.round(360 - Math.max(...gaps));
+  // Lead with what was NOT measured. The count of LEDs seen from several angles goes up when
+  // you stand still and take the same photo twice, so it is a bad headline; what matters is
+  // how much of the map is a guess, because that is where every front/back mistake lives.
   $('#builtText').innerHTML = [
-    three ? `${st.multi_view} LEDs placed from two or more angles, ${st.single_view} from one angle (depth estimated from
-             their neighbours), ${st.unseen} not seen (filled in along their string).`
+    three ? `<strong>${st.unseen} of ${total} LEDs were never photographed</strong> and are filled in along their
+             string; ${st.single_view} were seen from one angle only, so their depth is estimated from the string
+             either side. ${st.multi_view} were measured from two or more angles.`
           : `${st.multi_view} LEDs seen in more than one view, ${st.unseen} not seen (filled in along their string).`,
+    three && built.views.length <= 2 ? `Only two views: an LED seen in both is still only seen from one side of the
+             piece, so "measured" here does not yet mean front and back are told apart. Walk further round.` : '',
+    three && built.views.length > 2 && arc < 100 ? `<span class="warn">These views only get ${arc}&deg; round the
+             piece. Depth hardly shows up over so narrow an arc: take more views further round before trusting
+             this map, or export it flat.</span>` : '',
+    three && built.views.length > 2 && built.views.length < GUIDE.minViews ? `<span class="warn">Only
+             ${built.views.length} views. Six or more place about four times fewer LEDs on the wrong side of
+             the piece.</span>` : '',
     three ? `Angles used: ${built.views.map(v => `${v.angle}&deg;${Math.abs(v.refined_angle - v.angle) >= 1 ? ` (&rarr; ${v.refined_angle}&deg;)` : ''}`).join(', ')}.` : '',
+    clamped ? `<span class="warn">${clamped === 1 ? 'One view did' : clamped + ' views did'} not fit the angle you gave,
+             even after moving it the full 15&deg;. A compass reads badly near metal: re-run and type the angles
+             yourself, or re-take ${clamped === 1 ? 'that view' : 'those views'}.</span>` : '',
     three ? 'If the top view looks mirrored compared with the real object (e.g. you walked left instead of right), press <em>Flip</em>.' : '',
   ].filter(Boolean).join('<br>');
   $('#flipBtn').hidden = !three;
 }
-function drawPreview(cv, pts, a, b) {
+function drawPreview(cv, pts, a, b, measured) {
   const W = 300, H = 300, ctx = cv.getContext('2d');
   cv.width = W; cv.height = H;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
@@ -896,7 +1025,10 @@ function drawPreview(cv, pts, a, b) {
   const s = 270 / Math.max(hi[a] - lo[a], hi[b] - lo[b], 1e-9);
   pts.forEach((p, i) => {
     if (!p) return;
-    ctx.fillStyle = `hsl(${(i / pts.length) * 300}, 90%, 60%)`;      // colour along the chain
+    // Solid where the position was measured from two angles, faint where the depth is a
+    // guess: on the test rig every front/back mistake is in the faint ones.
+    const firm = !measured || measured[i];
+    ctx.fillStyle = `hsl(${(i / pts.length) * 300}, 90%, 60%, ${firm ? 1 : 0.3})`;
     ctx.fillRect(15 + (p[a] - lo[a]) * s, 15 + (p[b] - lo[b]) * s, 2, 2);
   });
 }
@@ -907,7 +1039,7 @@ $('#saveBtn').onclick = async () => {
   $('#saveBtn').disabled = true;
   try {
     const r = await api('/api/mapping/combine', {mode: 'auto', mirror, save: true});
-    toast(`Saved: ${r.controllers.map(c => `${c.name} ${c.found} seen + ${c.filled} filled`).join(', ')}.`, 6000);
+    toast(`Saved: ${r.controllers.map(c => `${c.name} ${c.measured} measured + ${c.estimated + c.filled} guessed`).join(', ')}.`, 6000);
     stopCamera(); session = null;
     showCheck(r.mode === 'around');
   } catch (e) { toast(e.message); }

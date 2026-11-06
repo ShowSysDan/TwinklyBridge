@@ -4,6 +4,284 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.17.0] - 2026-11-06
+
+**The guided walk plans over the arc you can actually reach, and says what it does not know.**
+
+Measured on the 3D ground-truth rig over 78 further view sets (plans crossed with props and
+seeds):
+
+- **Say how far round you can walk** before the guided walk starts - all the way, three
+  quarters, half, a quarter. It always takes eight views and spreads them over that arc
+  instead of stepping 45 degrees round a circle it assumed. The old plan left someone who
+  could only get three quarters of the way round stranded part way through it, and that case
+  measured 7.4 px median error against 5.1 for the same eight views spread over the arc they
+  could reach. The number of views turned out to matter more than how far round they go:
+  eight beat six beat four at every arc (four views put 4.4% of a two-faced star's LEDs on
+  the wrong side, eight put 1.0%), so the arc changes the step, never the count.
+- **The stops now avoid 90 and 270 degrees**, where a flat piece is edge-on to the camera and
+  a view finds about half as many LEDs. All the way round is now eight views 42 degrees apart
+  rather than 45: median error on the rig's two-faced star 6.3 -> 5.1 px, wrong face
+  1.8% -> 1.1%, and 22 more LEDs measured from two angles. A plan stepping a whole 90 degrees
+  is much worse again - 188 LEDs measured from two angles against 436.
+- **"Another view is probably worth about 40 more LEDs"** instead of a running total. The
+  total always goes up, even when you stand still and photograph the same side twice, so it
+  never says whether another view is worth taking.
+- **A view with almost nothing in common with the others is flagged at once**, rather than
+  after a 30-second capture that cannot be tied in: views are joined to each other through the
+  LEDs they share, so jumping to the far side leaves a view floating.
+- **The build page warns** when the kept views only get a short way round (under 100 degrees,
+  where depth barely shows up at all) or when there are fewer than six of them.
+- The page now says up front that **about a third of the LEDs will never be photographed**
+  from any angle - they are buried in the tinsel, and walking further does not reach them -
+  and asks for the phone to be held level with the middle of the piece, since ten degrees of
+  looking up roughly doubles the error on a flat piece.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`.
+
+## [0.16.0] - 2026-11-06
+
+**The Eos export stops folding a two-faced piece onto itself, and stops unwrapping a flat one.**
+
+0.14.0 added the `faces` flatten mode and `auto`. Measured against the 3D ground-truth rig,
+neither reached the case they were written for:
+
+- **`auto` sent a star with trees in front of it and a frame behind to `unwrap`** - in all 24
+  of 24 rig runs - because that piece reaches about half as far back as it is wide and the
+  test for "round" was set at 0.45. Unwrapping it around the vertical axis collapses the star
+  into two strips, which is exactly what 0.14.0 was written to prevent. The threshold is now
+  0.65, which sits between everything flat measured (0.10 - 0.52) and everything round
+  (0.76 - 1.08), and the same single rule now decides both how a hidden run is filled in and
+  how the map is flattened, instead of two thresholds that could disagree.
+- **`faces` did not split a genuinely two-faced piece**, so 36% to 68% of its back LEDs
+  landed on top of the front LED hiding them. The old test looked for an empty band in the
+  depths, and the LEDs whose depth the bridge guessed sit in that band - the string has to
+  cross over somewhere, and a guess lands on the way. The split is now found from the
+  **measured** LEDs only, scored as the distance between the two layers in pooled standard
+  deviations: the same star scores 3 to 5 with every LED in and 9 to 22 on the measured ones
+  alone, against 3.2 to 4.4 for every single-sheet piece tried. Over 48 held-out rig sets with
+  fresh geometry, fresh noise, 5% mis-decoded LEDs and both extremes of tinsel transparency,
+  the right decision was taken in 48 of 48, and folded pairs fell to 0.2% - 1.6%.
+
+Each LED is then put on whichever face its own depth falls on, rather than inheriting the
+face of its neighbours along the string: a string that crosses between faces more than once
+would make that inheritance wrong, and the point of the mapping is that you do not have to
+know how the string is routed.
+
+- The patch sheet CSV gains a **SOURCE** column (`measured` / `estimated` / `filled`), also
+  appended to the label, so the programmer can see on the desk which pixels are measurements.
+  The pixel map CSV is unchanged - that file's columns are Eos's own format.
+- The export preview draws estimated pixels at half brightness and filled ones at a quarter,
+  and the title line counts them.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`. If you exported a pixel map from a 3D map before this, export it again.
+
+## [0.15.0] - 2026-11-06
+
+**3D maps: the depth of a hidden LED is guessed far better, and the map now says which
+positions are measurements and which are guesses.**
+
+Measured on a new 3D ground-truth rig (three props - a two-faced flat star, a wrapped cone,
+a flat star with trees in front and a frame behind - 1250 LEDs in 5 ports, rendered from
+several angles with real occlusion, see-through and the decoder's own losses, against known
+positions). Over 48 held-out sets with fresh geometry, fresh noise, 5% mis-decoded LEDs and
+both extremes of tinsel transparency, **every one of the 48 improved**: median 3D error
+11.9 -> 5.7 px at 960 wide, LEDs placed on the wrong side of the piece 4.5% -> 1.3%, worst
+set 17.2% -> 6.8%.
+
+- **An LED seen from one angle takes its depth from its own string**, interpolated between
+  the nearest measured LED before it and after it on the same port (within 10 LEDs), instead
+  of averaging the six nearest by LED number across port boundaries. "The string runs between
+  two points we measured" invents no shape; the old rule could pull an LED onto the wrong face.
+  This is where most of the gain is.
+- **The gap fill no longer assumes a cylinder unless the piece is one.** Filling a hidden run
+  "round the back" is right for a tree or column and wrong for a star or a sign, where every
+  LED shares the vertical axis and the run gets swung out into space. The route is now chosen
+  from how deep the measured LEDs reach compared with how wide they spread: near 1 for a round
+  piece (fill round the axis, as before), well under half for anything with a front and a back
+  (fill along a smooth curve through the LEDs that were seen). A long gap, or one whose own
+  ends were guessed, goes straight, and no filled path is ever longer than the wire it stands
+  for - a string cannot stretch.
+- **The typed view angles are refined against the other views.** Each view's angle was being
+  judged against a map that view itself helped build, where its current angle always looks
+  right, so the search stalled. It is now judged against a map built without it, with the
+  view's own scale and offsets re-fitted at every candidate angle, and only moved when that
+  clearly cuts the error. The page warns when a view had to be moved the full 15 degrees,
+  which usually means a compass read badly near metal.
+- **Measured / estimated / filled is carried per LED** out of the solver, into the per-port
+  report (with the longest run that has no measurement in it), the saved map, `GET /api/map`
+  and `POST /api/mapping/combine`. The build page leads with how many LEDs were never
+  photographed rather than how many were seen twice - the second number goes UP when you
+  stand still and photograph the same side again. The preview draws estimated LEDs faded, and
+  the live map draws never-seen ones as rings as before.
+- With only two views the page now says plainly that "measured" does not yet mean front and
+  back are told apart: two views from nearly the same side agree with each other and are still
+  both looking at the front.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`. Existing saved maps keep working; re-run a capture to get the new per-LED detail.
+
+## [0.14.0] - 2026-11-06
+
+**The Eos export no longer folds a flat piece's back face onto its front.**
+
+- `unwrap` does not mean "flatten": it unrolls a cylinder around the VERTICAL AXIS. That is
+  right for the trees and columns it was written for, and wrong for a flat piece standing
+  upright - a star's LEDs all sit at much the same angle round that axis, so the star's shape
+  collapses into two strips at the edges of the map. The export defaulted every 3D map to it.
+- New flatten mode **`faces`**: lay a flat piece out in its OWN plane, so its shape survives.
+  The plane is fitted from the LEDs (so the piece can stand at any angle to the camera), and if
+  the piece really has two layers, the back one is placed beside the front rather than on top
+  of it, keeping left and right as they are in the room. Measured on a synthetic two-faced
+  star: with the front view, all 250 opposite pairs of LEDs land exactly on top of each other;
+  with `faces`, none do.
+- A piece whose LEDs merely wobble in depth - tinsel on a single face - is **not** split in
+  two. Splitting needs a clear empty band across the depths with at least a fifth of the LEDs
+  either side, so one sheet stays one sheet.
+- New flatten mode **`auto`**, and it is now what a 3D map defaults to: `faces` for a
+  plate-shaped piece, `unwrap` for a round one. The test is whether the piece's horizontal
+  spread is along one direction or both.
+
+## [0.13.1] - 2026-11-06
+
+- The camera page says what the per-pattern wait actually is now (the round trip to the bridge
+  plus the camera's lag with a margin, counted from sending the pattern), and says to connect
+  the phone directly rather than through a VPN - measured, every 100 ms of round trip costs
+  about 3 s on a 1,250-LED capture, and it is the largest single item in one.
+
+## [0.13.0] - 2026-11-06
+
+- **Mapping now works hand-held in a dark room too, and lining the photos up got faster.** The
+  coarse stage of the alignment ran on a quarter-size copy of the picture, so it could only
+  test shifts that were multiples of 4 px. An LED is about 1.3 px across, so a drift that
+  landed about 2 px off that step was invisible to it: it returned an arbitrary offset around
+  9 px out, far beyond what the fine pass could rescue. It failed at drifts of 2, 6 and 10 px
+  and was exact everywhere else - a mod-4 signature, which is why it looked like noise. The
+  coarse search now steps a whole pixel over a thinned mask, which costs less than the
+  downsampling it replaces. In the synthetic dark-room hand-held case that is 76 LEDs found
+  with 54 misplaced, against **1127 found and none misplaced**, the same as that scene gives
+  with the phone on a tripod. The real-capture result is unchanged (431 at 0.96) and lining up
+  a 29-photo capture goes from 1.75 s to 1.55 s. The expected-failure test from 0.12.0 is now
+  a passing one.
+- A direct regression test for it (`tests/js/shift_probe.js`): slide one photo by every whole
+  number of pixels from 0 to 12 and check each comes back. The old code gives 22.9 px of error
+  at its worst and is no less confident when it is wrong; a test that tries only one drift
+  cannot see a fault like this.
+
+## [0.12.4] - 2026-11-06
+
+- **Each photo is lined up once during a capture instead of three times.** The check for a
+  photo taken before the LEDs changed lined the photo up with the all-on photo inside a
+  condition that was evaluated twice, and then lined the same photo up again to keep as the
+  next photo's reference. Lining one up costs about 30 ms, and there are 27 of them: measured,
+  that was more time than the whole final decode. Same check, same threshold, one alignment.
+
+## [0.12.3] - 2026-11-06
+
+Capture time. Measured end to end, most of a capture is not photography or arithmetic: it is
+waiting for the round trip to the bridge, and for a wait sized from it.
+
+- **Only the camera's lag gets the safety margin now, not the round trip.** 0.12.0 folded the
+  round trip into the measured "camera lag" so that the wait could be counted from sending a
+  pattern rather than from the bridge's answer - which is right, because the LEDs change while
+  the request is still in flight - but the 1.3x margin then applied to the round trip as well.
+  On a 440 ms link that turned a 150 ms wait into 697 ms on every one of 33 patterns. The wait
+  is now `round trip + 1.3 x camera lag + 60 ms`, counted from sending, and every wait after a
+  step subtracts how long that step actually took, so a quick answer is not punished and a slow
+  one is compensated.
+- **Every step's round trip is recorded and reported**, not just the one sample the camera
+  timing happened to take. The result line now shows the median and range. This is the biggest
+  single line item in a capture and it was invisible.
+- README: connect the phone to the bridge directly rather than through a VPN. Every 100 ms of
+  round trip costs about 3 s on a 1,250-LED capture.
+
+## [0.12.2] - 2026-11-06
+
+- **The capture now shows how good it is, not just how much it found.** A bad decode can
+  "find" plenty of LEDs by scattering them anywhere, and the count alone looks healthy when it
+  does - the capture that started all this reported 457 of 1250 while fewer than half were
+  really placed. The result page now leads with the share of LEDs that landed next to the one
+  before them on the string (over 85% reads cleanly), and says plainly when the count cannot
+  be trusted. The "less than half found" warning is gone: one view only ever sees the LEDs
+  facing the camera, so half is normal and the warning was noise.
+- **The stale-photo check no longer depends on the phone's exposure.** It compared raw
+  brightness over every pixel the LEDs could reach, which in a lit room is mostly scattered
+  glow, so 25 s of auto-white-balance drift could read as "the pattern changed" or hide that
+  it had not. It is now compared band-passed and only at the LED dots: measured on a real
+  capture, a genuine change between consecutive patterns scores 0.15 at worst and a repeat of
+  the previous pattern scores 0.00, against a threshold of 0.08.
+
+## [0.12.1] - 2026-11-06
+
+- **A capture sent for diagnosis can now be re-read the way the phone read it.** The pattern
+  photos are held as brightness plus green-ness, but only brightness was written into the
+  uploaded JPEG, so the green-ness - the signal a lit-room capture is usually decoded from -
+  was thrown away. Each pattern photo now also goes up as `<step>_green.jpg`. It is a second
+  grey JPEG rather than one colour one because JPEG stores colour at half resolution, which
+  would blur a 3 px dot. The per-capture file limit goes from 60 to 80 to fit them.
+
+## [0.12.0] - 2026-11-06
+
+Camera mapping: the decoder rewritten. Measured on a real 1,250-LED capture (a tinsel star in
+a lit warehouse, photographed hand-held), the same photos that previously produced 457 "found"
+LEDs of which only about 200 were really placed now produce **430 placed correctly**: the
+measured LED pitch comes out at the piece's true 41 px instead of a meaningless 46.7, and the
+share of neighbouring LEDs sitting a plausible distance apart goes from 0.37 to 0.96.
+
+- **Every decision is made on the band-passed picture, not the raw pixel.** Tinsel scatters
+  each LED's light over the whole piece, so with half the LEDs lit at once most of the
+  brightness at an LED's own position is other LEDs' light: measured, an LED supplies only
+  ~27% of the raw level at its own core. A top-hat (the 3 px core minus the ring around it)
+  cancels that smooth glow, after which ~90% of what is left is the LED's own light.
+- **LEDs are found first, then decoded.** The old "every pixel brighter than 30" mask selected
+  17.5% of a lit-room frame - the dots plus the glow over all the tinsel plus every edge in
+  the room - which was useless as a spot list and useless to line photos up on. Spots are now
+  local maxima of the top-hat, with a self-calibrating threshold that holds in a dark room and
+  in a lit warehouse.
+- **Drift is measured properly and taken out with an affine fit.** The old alignment scored a
+  shift by how bright the LEDs were under it, which slides every pattern onto its own lit
+  subset; it reported "drift 0" on a capture that had drifted 22 px and corrected nothing.
+  Photos are now matched band-passed against the all-on photo, on the room's own static
+  texture where there is any, tracked photo by photo (a hand wanders ~4 px between photos, so
+  each is searched around the last), and corrected with an affine fit from a 4x6 grid of block
+  re-estimates - which also removes the few tenths of a degree of roll from aiming up at a
+  piece. A plain translation leaves up to 7 px across the frame and loses about 45% of the LEDs.
+- **The code is read as a whole word, not eleven separate bits.** Only 1,250 of the 2,048
+  possible 11-bit words are real LEDs, so each spot is matched against all of them; a bit that
+  came out marginal is corrected instead of throwing the LED away.
+- **"The phone moved" no longer cries wolf.** It compared the all-on photos from the start and
+  end of the capture raw, so 25 seconds of the phone's own auto-white-balance drift read as
+  movement. It is now a gain-invariant correlation of the band-passed photos at the LEDs,
+  after alignment: it reports movement the alignment could not undo, which is the only kind
+  that matters.
+- **The live aim view no longer hides the camera picture.** It painted every pixel that
+  brightened by 25 solid green, which on a tinsel piece is 19% of the preview held still and
+  up to 47% in the hand (a bright edge enters the 2-second window at one place and leaves at
+  another) - the reported "the camera display just disappears". It now rings each LED it finds:
+  a few hundred small markers, a few percent of the picture, with a hard ceiling on how much
+  can ever be drawn. The aim canvas went from 320 to 480 px wide so 3 px dots can be found at all.
+- **The wait after each pattern is measured from the right moment.** `cameraLag()` started its
+  stopwatch after the HTTP round trip, but the bridge starts sending the new frame while the
+  request is still in flight, so the lag came out short by however long the round trip took and
+  any later pattern with a faster round trip was photographed before it appeared. The lag is
+  now timed from before the request, and the wait counts from the request too, so a varying
+  round trip cannot eat it.
+- **The synthetic camera in the tests is now physically faithful**, which is why none of the
+  above was caught earlier: it placed LEDs 2.2 px apart in a straight line with no scattered
+  glow, a scene that made "find the dots first" look like it merged neighbours and made
+  alignment look unnecessary. It now uses the measured geometry of a real draped string (~20 px
+  along the wire, ~6 px to the nearest LED on the next fold, irregular), a glow pedestal
+  calibrated to the measured ~30% own-share, camera roll, a continuous drift instead of
+  independent per-frame jumps, and a room that moves with the camera. New cases cover a
+  hand-held phone in a lit room and in the dark.
+- Known limit, recorded as an expected failure in the tests: a blacked-out room, hand-held,
+  with LEDs that show no bloom at all. There is then nothing to line the photos up on but the
+  LEDs themselves, and a coding photo lights only half of them, so a shift that maps the string
+  onto itself scores as well as the true one. Any room light, or any bloom, resolves it; the
+  result degrades visibly rather than producing a confident wrong map.
+
 ## [0.11.2] - 2026-11-05
 
 LEDs not lighting for test patterns or mapping:

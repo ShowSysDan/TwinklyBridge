@@ -286,8 +286,9 @@ const canvas = $('#map'), ctx = canvas.getContext('2d');
 let flatTouched = false;
 async function loadMaps() {
   maps = (await api('/api/map')).filter(m => m.points.length);
-  // 3D maps are exported flat: default the Eos export to unwrapping them (until the user picks)
-  if (!flatTouched) $('#eFlat').value = has3D() ? 'unwrap' : 'xy';
+  // 3D maps are exported flat; which way depends on the shape, so let the bridge decide
+  // (a star unwrapped as if it were a cylinder collapses into two strips)
+  if (!flatTouched) $('#eFlat').value = has3D() ? 'auto' : 'xy';
 }
 // 3D maps: drag the live map to turn it (yaw around the vertical axis, pitch over the top).
 let yaw = 0, pitch = 0, drag = null;
@@ -344,6 +345,7 @@ function draw() {
     for (const p of m.proj) { dlo = Math.min(dlo, p[2]); dhi = Math.max(dhi, p[2]); }
     const order = m.proj.map((p, i) => i).sort((a, b) => m.proj[a][2] - m.proj[b][2]);    // far first
     const guessed = new Set(m.filled || []);                                                // drawn as rings
+    const softened = new Set(m.estimated || []);                     // seen once: depth guessed, drawn dimmer
     for (const i of order) {
       const [x, y, d] = m.proj[i];
       const px = ox + (x - t.x0) * s, py = oy + (y - t.y0) * s;      // Twinkly y grows downward, same as canvas
@@ -358,7 +360,7 @@ function draw() {
       }
       ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
       if (guessed.has(i) && col.startsWith('rgba(44,')) { ctx.strokeStyle = `rgba(140,149,166,${near})`; ctx.lineWidth = 1; ctx.stroke(); }
-      else { ctx.fillStyle = col; ctx.fill(); }
+      else { ctx.fillStyle = softened.has(i) && col.startsWith('rgba(44,') ? `rgba(44,52,66,${near * 0.45})` : col; ctx.fill(); }
       hit.push({cid: m.id, c: m, index: i, x: px, y: py, d});
     }
   }

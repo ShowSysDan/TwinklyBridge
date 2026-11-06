@@ -48,7 +48,7 @@ the real-time protocol, which is what this bridge does.
 | **Parameter count** | As soon as a map is in, how many Eos parameters it uses, per controller and in total (see [Parameter count](#parameter-count)) |
 | **Live map** | Every LED drawn where it really is, lit with the frames going out; click one to flash it and read its controller / port / LED |
 | **Auto patch** | Every controller on contiguous universes (170 RGB pixels / 510 channels each), ordered by group offset |
-| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV; 3D maps flattened front / top / side or unwrapped around the vertical axis |
+| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV (with a SOURCE column: measured / estimated / filled); 3D maps flattened automatically - a flat piece in its own plane with any back face beside the front, a round one unwrapped around the vertical axis - or front / top / side by hand |
 | **Runs as a service** | `install.sh` sets up a sandboxed systemd service on Linux that restarts forever; `install.bat` / `run.bat` on Windows |
 | **Access control** | Optional address allowlist, UI password, cross-site request blocking, security headers |
 | **Logging** | Every operator action and every controller fault, to the console / journald, local syslog and optionally a remote syslog server |
@@ -402,12 +402,22 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 3. **Patch all, new universe each**: every controller gets contiguous universes, 170 pixels
    (510 channels) per universe, ordered by the controllers' group offset when they report one.
 4. **Export for Eos**: Eos pixel maps are flat, so a 3D map is flattened for the export
-   (the bridge keeps the 3D map). 3D maps default to **Unwrap**: the cylinder or cone cut
-   down the back and opened out, front in the middle, width in proportion to the way round
-   and height down, so a tree becomes a rectangle. **Cone, unrolled exactly** opens it into
-   a fan instead (distances along the surface stay true; needs more cells); **Sphere** uses
-   longitude and latitude; front, top and side views are there too. Preview the grid,
-   download the pixel map CSV. On the desk: File → Import → CSV, include Pixel Maps.
+   (the bridge keeps the 3D map). 3D maps default to **Automatic**, which looks at how deep
+   the measured LEDs reach compared with how wide they spread:
+   - a **round** piece (a tree, a column, a ball) is **unwrapped** - the cylinder or cone cut
+     down the back and opened out, front in the middle, width in proportion to the way round
+     and height down, so a tree becomes a rectangle;
+   - a **flat** piece (a star, a sign, a panel) is laid out **in its own plane** so its shape
+     survives, and if its LEDs really sit in two layers the back one goes beside the front
+     rather than on top of it. Which LEDs are on which face is decided from the ones the
+     camera measured from two angles, because the guessed ones sit between the faces.
+
+   **Cone, unrolled exactly** opens a cone into a fan (distances along the surface stay true;
+   needs more cells); **Sphere** uses longitude and latitude; front, top and side views are
+   there too. Preview the grid, download the pixel map CSV. On the desk: File → Import → CSV,
+   include Pixel Maps. The patch sheet CSV carries a **SOURCE** column per pixel - `measured`,
+   `estimated` (seen from one angle, depth guessed) or `filled` (never seen) - so the
+   programmer can tell a measurement from a guess on the desk.
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 
@@ -427,20 +437,32 @@ port's real string length and checks its colour order.
    end up in one coordinate space, so the Eos export can lay them out as one map.
 3. **Open the camera** and allow camera and motion access (motion gives the compass and tilt
    readouts). Frame the whole installation and hold the phone still: a tripod, or leaned
-   against something. Darken the room if you can.
-   While you aim, the LEDs blink and the preview shows green where the camera sees them,
-   red where they are too bright (clipped), and warns if LEDs reach the edge of the picture.
+   against something. A lit room is fine: the room's own texture gives the drift something to
+   be measured against, so a warehouse with the lights on works as well as a dark one.
+   While you aim, the LEDs blink and the preview rings each LED the camera can see in green,
+   red where it is too bright (clipped), and warns if LEDs reach the edge of the picture. The
+   rings sit on the LEDs and never cover the picture, so you can still see what you are aiming at.
 4. **Capture.** The phone picks the LED level (it tries 255 down to 32 and takes the brightest
    that neither flickers on this camera nor clips: dimming LEDs is PWM, which a phone's
    rolling shutter can catch as stripes), first times the camera (LEDs off, then on: how long until the
-   camera shows it) and sets its wait from that, then the LEDs flash 28 full-green patterns
+   camera shows it) and sets its wait from that plus the measured round trip to the bridge,
+   counted from when each pattern is sent rather than when the bridge answers - the LEDs change
+   while the request is still in flight, so a step that answers quickly would otherwise be
+   photographed too early. Then the LEDs flash 28 full-green patterns
    (about 15-25 s for 1,250 LEDs, depending on the camera); keep still until it says
-   *Working it out*. Every photo is checked against the one before; one taken before the
-   LEDs changed is taken again. A hand-held phone may drift a little: every photo is lined up
-   with the all-on photo (using the LEDs themselves) before decoding, and *the phone moved* is
-   only reported when it turned or drifted too far to correct.
+   *Working it out*. Every photo is checked against the one before, band-passed and only where
+   the LEDs are, so the phone's own exposure drifting over the capture cannot be mistaken for
+   the pattern changing; one taken before the LEDs changed is taken again. A hand-held phone drifts - about 20 px over a capture, against
+   LEDs only 3 px across - so every photo is lined up with the all-on photo before decoding:
+   the drift is measured on the room's own texture where there is any (and on the LEDs
+   otherwise), tracked photo by photo, and taken out with an affine fit that also removes the
+   roll from aiming up at the piece. *The phone moved* is only reported when the two all-on
+   photos, start and end, no longer match after that.
 5. **Check the capture**: the photo with a dot on every LED found, coloured by port, and a
-   table per port:
+   table per port. Above it is the number worth reading first: *how many LEDs landed next to
+   the one before them on the string*. A bad capture can still "find" plenty of LEDs by
+   putting them anywhere, and the count alone looks healthy when it does; this is what gives
+   it away. Over 85% reads cleanly.
 
    | Column | Meaning |
    |---|---|
@@ -451,30 +473,55 @@ port's real string length and checks its colour order.
    Dots run red to violet along each string from its first LED: a right string is one
    smooth rainbow; a dot in the wrong colour is a misread LED. If a capture looks wrong,
    **Send photos to the bridge**: every photo goes to `instance/captures/`, and the desk
-   page's *Camera mapping* panel offers them as a zip, to see what the camera saw. (They are
-   sent after every capture anyway while *Send the photos to the bridge after each capture*
-   is ticked, as it is by default.)
+   page's *Camera mapping* panel offers them as a zip, to see what the camera saw. Each
+   pattern photo is sent twice, as what the camera saw (`b0.jpg`) and as its green-ness
+   (`b0_green.jpg`), because a lit room is usually decoded from the green-ness and a capture
+   has to be re-readable the way the phone read it. (They are sent after every capture anyway
+   while *Send the photos to the bridge after each capture* is ticked, as it is by default.)
 6. **Keep this view.** The installation now shows what has been found: **green** in this
    view, **blue** in earlier views, **red** not found yet.
    **Walk around (guided)** does steps 4 to 8 by itself for a 3D piece: it captures and keeps
    a view, then directs you round with the compass and tilt sensor ("Walk to your right: 28
-   of 45 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
+   of 42 degrees", "Too far: step back", "Hold the phone upright") and captures again by itself
    once the phone is at the next angle, upright and still; after eight views (or *Finish &
    build*) it builds the map. The phone must stand still while each view is captured (about
    16 s after the first), because each LED's number is read from the same pixels across about
    25 photos. Without a compass it asks you to tap *I'm there* at each stop.
-7. Or by hand: for a 3D piece, **walk about 45 degrees further round to your right**, keeping the same
+
+   Tell it **how far round you can walk** first. It always takes eight views and spreads them
+   over that arc, rather than stepping 45 degrees round a circle it assumed and leaving you
+   stranded part way through: on the 3D test rig, eight views over the arc actually reachable
+   beat the same eight views from a plan abandoned early, and the number of views matters more
+   than how far round they go (eight beat six beat four at every arc). It also keeps the stops
+   off 90 and 270 degrees, where a flat piece is edge-on to the camera and gives up about half
+   its LEDs. It says what the next view is likely to add, so you can decide when to stop, and
+   warns if a view has almost nothing in common with the others - views have to overlap to be
+   tied together, so if you jump to the far side there is nothing to join it to.
+7. Or by hand: for a 3D piece, **walk about 40 degrees further round to your right**, keeping the same
    distance and height, point the phone at the middle of the piece again and *Capture another
    view*; repeat until little red is left. The angle fills itself in from the phone's compass
-   (heading change since the first view) and can be typed or picked instead. 8 views all
-   round is best (they also correct a compass that is a few degrees out); 4 is the minimum.
-   For a flat piece one view is enough; more views from the front just fill gaps.
+   (heading change since the first view) and can be typed or picked instead. 8 views spread
+   over as much of the way round as you can get is best (they also correct a compass that is a
+   few degrees out); 4 is the minimum, and 6 places about four times fewer LEDs on the wrong
+   side of the piece than 4 does. For a flat piece one view is enough; more views from the
+   front just fill gaps.
+
+   Hold the phone **level with the middle of the piece**. Chest height three metres from a
+   star whose centre is at 2.2 m is 13 degrees of elevation, and ten degrees of it roughly
+   doubles the error on a flat piece. If you cannot raise the phone that high, stand further
+   back: the elevation is an angle, so twice the distance is half the tilt.
+
+   About **a third of the LEDs are never photographed from any angle**, however many views you
+   take - they are buried in the tinsel, not round the back - so walking further does not
+   reach them. They are filled in along their string, and the build page says how many.
 8. **Build map** combines the views: views from about the same direction are fitted onto
    each other (zoom, turn, shift) and averaged (2D); views from different directions give
-   each LED's 3D position (each LED seen from two directions is placed exactly, one seen
-   from one direction gets its depth from its neighbours). The preview shows the map from
-   the front and from above, coloured along the chain. If it looks mirrored compared with the
-   real object (you walked left), press **Flip**.
+   each LED's 3D position. An LED seen from two directions is **measured**; one seen from a
+   single direction has its sideways position measured and its depth **estimated** from where
+   its own string ran just before and just after it; one never seen is **filled in** along the
+   string. The page leads with how many were never photographed, because that is where
+   front/back mistakes live, and the preview draws estimated LEDs faded. If the map looks
+   mirrored compared with the real object (you walked left), press **Flip**.
 9. **Save map**, then **check it on the installation**: *Left to right*, *Top to bottom*,
    *Front to back*, *Spin around*, *Ring from centre* and *Rainbow across* run bars and
    planes placed by the map. On a right map the bar crosses the real object smoothly and
@@ -482,11 +529,23 @@ port's real string length and checks its colour order.
    patterns* panel (group *On the map*).
 
 **Obstructed or unseen LEDs** are filled in along their string, assuming the string carries
-on the way it was going: in 3D, round the object (angle, distance from the axis and height
-change smoothly, at the string's own spiral rate either side of the gap) rather than straight
-through it; at a string's end, by continuing its last stretch. The vertical axis comes from
-circles fitted to the LEDs seen at each height, so a hidden side doesn't pull it off centre.
-The live map draws filled-in LEDs as rings, so you can see which positions are guesses.
+on the way it was going. Which way it went is itself a guess, and the wrong guess is worse
+than none, so it is chosen from the shape the camera measured:
+
+- **Round pieces** (a tree, a column: as deep as they are wide) are filled round the object -
+  angle, distance from the axis and height change smoothly, at the string's own spiral rate
+  either side of the gap - rather than straight through it. The vertical axis comes from
+  circles fitted to the LEDs seen at each height, so a hidden side doesn't pull it off centre.
+- **Everything else** - stars, signs, panels, anything with a front and a back - is filled
+  along a smooth curve through the LEDs that were seen, which assumes only that the string
+  carries on. A short gap between two measured LEDs gets the curve; a longer one, or one whose
+  own ends were guessed, goes straight. No filled path is ever longer than the wire it stands
+  for. Assuming a cylinder here would wrap LEDs round a shape that isn't there.
+
+At a string's end, the fill continues its last stretch, no further than the wire reaches.
+The live map draws filled-in LEDs as rings and one-angle LEDs faded, so you can see at a
+glance which positions are measurements and which are guesses; the per-port table gives the
+same three counts and the longest run with no measurement in it.
 
 Views are kept (in `instance/mapping_views.json`) until you discard them, so you can come
 back and add views later; starting with a different set of controllers starts afresh.
@@ -513,16 +572,28 @@ shows the addresses, where HTTPS is listening, and why it is off if it is:
   --force`) and restart; the panel warns when the machine's IP is missing from it.
 - Use the address the panel shows, with the `https://` (typing it without now redirects).
 
-Lit rooms: mapping works with the lights on. Each capture is read both by brightness and by
-the LEDs' green colour (white walls, grey concrete and copper tinsel aren't green, however
-bright), and the better result is kept. A darker room still finds more LEDs, and shiny
-surfaces near the LEDs (tinsel) reflect their light; the phone shows how bright it measures
-the room.
+Lit rooms: mapping works with the lights on, and the room light helps as much as it hurts -
+the texture of the walls is what each photo is lined up on. Each capture is read both by
+brightness and by the LEDs' green colour (white walls, grey concrete and copper tinsel aren't
+green, however bright), and the better result is kept - "better" counts how many neighbouring
+LEDs landed a plausible distance apart, not how many were found, because a bad decode finds
+plenty by scattering them anywhere.
+
+Shiny surfaces near the LEDs (tinsel) scatter their light over the whole piece: with half the
+LEDs lit at once, most of the raw brightness at an LED's own position is other LEDs' light
+coming back off the prop. Every decision is therefore made on the band-passed picture (an
+LED's dot minus the ring around it), where that smooth glow cancels and the LED's own light is
+what is left. The phone shows how bright it measures the room.
 
 Tips: keep the phone still; that matters more than anything else. The
-wait after each pattern is measured per capture (camera lag x 1.3); if the result shows many
-*photos retaken* or stops with *the camera isn't keeping up*, raise *Shortest wait after
-each pattern*. If dots are scattered or strings aren't smooth rainbows, *Send photos to the
+wait after each pattern is measured per capture (the round trip to the bridge, plus the camera's
+own lag with a margin); if the result shows many *photos retaken* or stops with *the camera
+isn't keeping up*, raise *Shortest wait after each pattern*.
+
+**Connect the phone to the bridge directly, not through a VPN.** The result line reports the
+round trip it measured. Most of a capture is spent waiting for it: on a LAN it should be tens
+of milliseconds, and every 100 ms of it costs about 3 s on a 1,250-LED capture. A capture that
+takes 30 s over a tunnel takes well under half that on the same network. If dots are scattered or strings aren't smooth rainbows, *Send photos to the
 bridge* and look at (or share) the zip: the photos show what the camera actually saw.
 
 How it works: every LED gets a number, written in Gray code, one bit per pattern and each
@@ -724,7 +795,8 @@ POST /api/controllers/<id>/probe         Diagnose: GET each likely map URL (read
 POST /api/controllers/<id>/map/csv       multipart file= (columns index,x,y,z)
 DELETE /api/controllers/<id>/map
 GET  /api/controllers/<id>/map.csv
-GET  /api/map                            points per controller
+GET  /api/map                            points per controller, with "filled" (never seen) and
+                                          "estimated" (seen from one angle, depth guessed)
 GET  /api/frames                         last frame per controller, base64
 POST /api/controllers/<id>/test          {"mode": "pattern"|"pixel"|"solid"|"off"|"stop", "pattern": "chase",
                                           "index": 10, "rgb": [255,0,0], "speed": 25, "seconds": 3}
@@ -739,10 +811,12 @@ POST /api/mapping/save                   {"session", "points": [[x,y]|null...], 
 POST /api/mapping/view                   {"session", "angle", "points", "colours", "heading", "pitch", "moved"}: keep as a view
 GET  /api/mapping/views                  the kept views; DELETE discards them
 POST /api/mapping/combine                {"mode": "auto"|"flat"|"around", "mirror": false, "save": false}
+                                          -> points, per-view fit, stats and "measured" (one bool per LED:
+                                             position measured from two angles, or partly guessed)
 POST /api/mapping/captures/<name>/<file> one photo (image/png) or the notes (capture.json) of a capture
 GET  /api/mapping/captures               the captures sent from the phone; <name>.zip downloads one; DELETE removes it
 POST /api/mapping/stop
-GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
+GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=auto|faces|xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB
 GET  /api/export/eos_patch.csv           same parameters
 GET  /api/export/eos_preview.svg         same parameters

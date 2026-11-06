@@ -97,7 +97,7 @@
       <span>Live map, lit with the frames going out right now. Click an LED to flash it.</span>
       <label><input type="checkbox" id="shared"> Draw all controllers in one space (join groups)</label>
       <span id="rotHint" hidden>3D map: drag to turn, double-click to reset.</span>
-      <span class="hint">Rings: positions filled in, not seen by the camera.</span>
+      <span class="hint">Rings: never seen by the camera, filled in along the string. Faded: seen from one angle, so the depth is a guess.</span>
       <span class="pick" id="pick"></span>
     </div>
     <div class="empty" id="mapEmpty">No maps yet. Use <em>Pull map</em> on a controller to fetch its camera layout, or upload a CSV from tools/twinkly_layout.py.</div>
@@ -111,6 +111,8 @@
         <label for="ePm">Pixel map number</label><input type="number" id="ePm" value="1" min="1">
         <label for="eFlat">Flatten</label>
         <select id="eFlat">
+          <option value="auto">Automatic: flat pieces in their own plane, round ones unwrapped</option>
+          <option value="faces">Flatten a flat piece (star, sign, panel); a back face goes beside the front</option>
           <option value="xy">Front view (x across, y down)</option>
           <option value="xz">Top view (x across, z down)</option>
           <option value="zy">Side view (z across, y down)</option>

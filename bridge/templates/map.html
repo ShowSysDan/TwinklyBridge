@@ -26,9 +26,14 @@
   <div id="ctrlList" class="checks"></div>
   <div id="viewsBox"></div>
   <label class="row">Coverage colours brightness <input type="range" id="level" min="16" max="255" value="128"><span id="levelV">128</span></label>
-  <label class="row">Shortest wait after each pattern (ms) <input type="number" id="settle" value="150" min="50" max="3000" step="50"></label>
+  <label class="row">Shortest wait per pattern (ms) <input type="number" id="settle" value="150" min="50" max="3000" step="50"></label>
   <p class="hint">The patterns themselves are full green (no dimming, so no flicker in the photos). The wait is
-    measured at the start of every capture from how long the camera takes to show a change; this is only the minimum.</p>
+    measured at the start of every capture: the round trip to the bridge, plus how long the camera takes to show a
+    change, with a margin. It is counted from sending each pattern, because the LEDs change while the request is
+    still in flight. This box is only the minimum.</p>
+  <p class="hint">Most of a capture is spent waiting for that round trip, so connect the phone to the bridge
+    <strong>directly rather than through a VPN</strong>: the result page reports the round trip it measured, and
+    every 100&nbsp;ms of it costs about 3&nbsp;s on a 1,250-LED capture.</p>
   <p class="hint">Darken the room if you can. Hold the phone still for each capture (about 20 s): a tripod, or lean it
     on something. For a flat piece one capture from the front is enough. For a 3D piece (tree, sphere) capture it
     from several sides, walking around it to your right, about 45&deg; apart (8 views all round is best; 4 is the
@@ -53,6 +58,17 @@
     <p class="hint" id="camState"></p>
     <button id="resumeAim" class="big" hidden>Resume the live view (blinks the LEDs)</button>
     <p class="hint" id="aimInfo">The LEDs blink while you aim: green on the picture = LEDs the camera sees, red = too bright (clipped).</p>
+    <label class="row">How far round can you walk?
+      <select id="arc">
+        <option value="315" selected>All the way round</option>
+        <option value="250">Three quarters</option>
+        <option value="180">Half way</option>
+        <option value="120">A quarter</option>
+      </select></label>
+    <p class="hint">The guided walk spreads its views over the part you can reach, instead of
+      stopping half way round a circle it assumed. Hold the phone level with the middle of the
+      piece: if you can't raise it that high, stand further back - the tilt is an angle, so twice
+      the distance is half the tilt.</p>
     <label class="checkrow"><input type="checkbox" id="autoSend" checked><span>Send the photos to the bridge after each capture</span></label>
   </div>
   <div class="mobbar" id="camButtons">
@@ -65,9 +81,9 @@
     <button id="stopGuideBtn" class="big">Stop</button>
     <button id="hereBtn" class="big" hidden>I'm there</button>
   </div>
-  <p class="hint center">Walk around: the phone captures a view, tells you to walk about 45&deg; to your right,
-    and captures again by itself when you're there, upright and still, all the way round; then builds the 3D map.
-    For a flat piece, <em>Capture one view</em> is enough.</p>
+  <p class="hint center" id="guideHint">Walk around: the phone captures a view, tells you how far to walk to your
+    right, and captures again by itself when you're there, upright and still, until it has been all the way round
+    the part you can reach; then builds the 3D map. For a flat piece, <em>Capture one view</em> is enough.</p>
 </section>
 
 <section id="result" hidden>

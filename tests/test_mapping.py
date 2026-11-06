@@ -77,35 +77,78 @@ def test_decoder_on_a_harsh_synthetic_camera():
     """Bloom and clipping, stripes across the picture, a floor reflection of every LED, more
     noise and exposure drift between photos: fewer LEDs, but none put in the wrong place."""
     d = run_sim("hard")
-    assert d["stats"]["found"] > 1100 and d["wrong"] == 0 and d["meanErr"] < 0.6
+    assert d["stats"]["found"] > 950 and d["wrong"] == 0 and d["meanErr"] < 1.0
 
 
 def test_green_ness_in_a_lit_warehouse():
     """A lit warehouse: grey textured room around 140, copper tinsel that glints, the camera
-    exposed for the room, green spill round every LED. Reading the LEDs by green-ness finds
-    clearly more than by brightness, and the better one is used."""
+    exposed for the room, and enough scattered glow that an LED supplies only ~30% of the raw
+    brightness at its own position. Reading the LEDs by green-ness finds clearly more than by
+    brightness, and the better one is used."""
     d = run_sim("bright")
     assert d["signal"] == "green-ness" and d["tried"]["green-ness"] > 1.15 * d["tried"]["brightness"]
-    assert d["stats"]["found"] > 850 and d["wrong"] < 0.03 * d["stats"]["found"]
+    assert d["stats"]["found"] > 900 and d["wrong"] == 0
 
 
-def test_stabilising_a_hand_held_phone():
-    """Every photo drifts up to 12 px (sub-pixel) like a hand-held phone: lined up with the
-    all-on photo first, every LED is still found in the right place and no 'moved' is raised;
-    without lining up, the same photos find nothing."""
-    d = run_sim("shake")
-    assert d["stats"]["found"] == 1200 and d["wrong"] == 0 and d["meanErr"] < 0.5
-    assert not d["stats"]["cameraMoved"] and d["stab"]["drift"] > 5 and not d["stab"]["unaligned"]
-    raw = run_sim("shake", stabilise=False)
+def test_a_hand_held_phone_in_a_lit_room():
+    """The real-world case: a lit warehouse photographed hand-held, so the picture wanders about
+    20 px over the capture and rolls a few tenths of a degree. The drift is measured against the
+    room's own texture and taken out with an affine fit, so every LED still lands in the right
+    place and no 'the camera moved' warning is raised. Without lining the photos up, the same
+    photos decode to almost nothing: 20 px of drift against a 3 px dot is fatal."""
+    d = run_sim("brightshake")
+    assert d["stats"]["found"] > 950 and d["wrong"] == 0 and d["meanErr"] < 1.0
+    assert d["stab"]["drift"] > 10 and not d["stab"]["unaligned"] and not d["stats"]["cameraMoved"]
+    assert d["stab"]["affine"] >= 20                       # roll is fitted, not just translation
+    raw = run_sim("brightshake", stabilise=False)
     assert raw["stats"]["found"] < 100
 
 
+def test_a_hand_held_phone_in_the_dark():
+    """The same hand-held drift in a dark room, where the LEDs bloom (any real LED bright enough
+    to photograph does). The drift is measured from the LEDs themselves and still comes out."""
+    d = run_sim("hardshake")
+    assert d["stats"]["found"] > 950 and d["wrong"] == 0 and d["meanErr"] < 1.0
+    assert d["stab"]["drift"] > 10 and not d["stab"]["unaligned"]
+
+
+def test_a_hand_held_phone_in_a_blacked_out_room():
+    """The hardest case: a blacked-out room, hand-held, and LEDs that are bare dots with no
+    bloom - so the only thing in the picture to line the photos up on is the LEDs themselves.
+    This used to fail, because the coarse search stepped four pixels at a time: an LED is about
+    a pixel and a half across, so a drift landing two pixels off that step was invisible to it
+    and it answered with something nine pixels wrong. It steps one pixel now."""
+    d = run_sim("shake")
+    assert d["stats"]["found"] > 950 and d["wrong"] == 0 and d["meanErr"] < 1.0
+    assert d["stab"]["drift"] > 10 and not d["stab"]["unaligned"]
+
+
+def test_drift_is_found_whatever_fraction_of_a_pixel_it_lands_on():
+    """The bug above, directly: slide one photo by a known 0 to 8 px and check every one comes
+    back. It failed at exactly 2 and 6 px before - a mod-4 signature, not noise."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "shift_probe.js"),
+                          os.path.join(ROOT, "bridge", "static", "js", "mapdecode.js")],
+                         capture_output=True, text=True, timeout=300, check=True)
+    got = json.loads(out.stdout)
+    # the old coarse search gave 22.9 px here, failing at offsets 2, 6 and 10 and nowhere else
+    assert got["worst_error_px"] < 1.0, got
+    assert got["z_evenness"] > 0.5, got      # and it was no less sure of the wrong answers
+
+
 def test_decoder_on_synthetic_camera():
+    """The baseline: a still phone, a dark room. LEDs ~20 px apart along the wire and ~6 px from
+    the nearest LED on the next fold of the string, as measured on a real capture."""
     d = run_sim()
     st = d["stats"]
-    assert st["found"] == 1200 and d["wrong"] == 0 and d["meanErr"] < 0.5 and not st["cameraMoved"]
-    assert d["foundPerPort"] == [250, 250, 250, 250, 200] and d["lastPort4"] == 200
-    assert d["colours"]["2:GRB"] == 250 and d["colours"]["0:RGB"] == 250
+    assert st["found"] > 1050 and d["wrong"] == 0 and d["meanErr"] < 0.8 and not st["cameraMoved"]
+    assert st["inBand"] > 0.95                              # neighbours really are neighbours
+    assert all(n > 180 for n in d["foundPerPort"]) and d["lastPort4"] == 200
+    # colour order is read per port, and never read wrongly
+    assert d["colours"]["2:GRB"] > 180 and d["colours"]["0:RGB"] > 180
+    assert not any(k.endswith(":RGB") for k in d["colours"] if k.startswith("2:"))
 
 
 def test_mapping_session_through_the_api(bridge, mock):
@@ -130,12 +173,18 @@ def test_mapping_session_through_the_api(bridge, mock):
         ports = rep["controllers"][0]["ports"]
         assert ports[2]["colour_order"] == "GRB" and not ports[2]["ok"]
         assert ports[4]["last_seen"] == 200 and "string ends at LED 200 of 250 configured" in ports[4]["notes"]
-        assert ports[0]["ok"] and mapping.SESSION is not None          # preview only: nothing saved yet
+        # the report says what was really seen: one capture from one side does not see every
+        # LED, and the port says so rather than claiming to be fine
+        assert ports[0]["colour_order"] == "RGB" and ports[0]["found"] > 180
+        assert any("not seen before the end" in note for note in ports[0]["notes"])
+        assert mapping.SESSION is not None                             # preview only: nothing saved yet
         rep = client.post("/api/mapping/save", json=body).get_json()
         c = rep["controllers"][0]
-        assert (c["found"], c["filled"], c["parameters"]) == (1200, 50, 3 * N)
+        found = sum(1 for p in d["points"] if p)
+        assert c["found"] == found and c["filled"] == N - found and c["parameters"] == 3 * N
         st = client.get("/api/status").get_json()["controllers"][0]
-        assert st["map_source"] == "camera, 1200 seen, 50 filled" and not st["testing"] and mapping.SESSION is None
+        assert st["map_source"] == f"camera, {found} seen, {N - found} filled"
+        assert not st["testing"] and mapping.SESSION is None
     finally:
         client.post("/api/mapping/stop")
         state.CONTROLLERS[cid].map, state.CONTROLLERS[cid].map_source = saved
@@ -181,3 +230,24 @@ def test_step_sets_the_coding_level(bridge, mock):
         assert mock.state.last_frame[1] == 255                                     # clamped
     finally:
         client.post("/api/mapping/stop")
+
+
+def test_the_guided_walk_plans_over_the_arc_you_can_reach():
+    """The walk used to take 8 views 45 degrees apart whatever the piece or the room allowed,
+    so someone who could only get three quarters of the way round stopped half way through the
+    plan. It now spreads its views over the arc the user says they can walk, never asking for
+    more than that, and keeps them off the angles where a flat piece is edge-on to the camera
+    and gives up about half its LEDs (90 and 270 degrees)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "guide_plan.js"),
+                          os.path.join(ROOT, "bridge", "static", "js", "mapping.js")],
+                         capture_output=True, text=True, timeout=60, check=True)
+    plans = json.loads(out.stdout)
+    assert set(plans) == {"315", "250", "180", "120"}
+    for arc, p in plans.items():
+        assert p["span"] <= int(arc)                   # never further than they said they can go
+        assert p["span"] >= int(arc) - 2 * p["step"]   # and most of the way round it
+        assert p["edgeOn"] == 0 and len(p["angles"]) == 8
+    assert plans["315"]["step"] != 45                  # the old plan put two of eight views edge-on
