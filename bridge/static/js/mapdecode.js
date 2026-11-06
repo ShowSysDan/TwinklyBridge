@@ -129,7 +129,13 @@
   //    are lit, so it is the honest estimator, and a warehouse is full of it;
   //  - the LED cores themselves, which is all there is in a dark room.
   // Also returns the band-passed all-on photo, which every frame is matched against.
-  const MASK_MAX = 40000;
+  //
+  // The mask is thinned to MASK_MAX points, evenly through the picture. This is the decoder's
+  // main speed control and it is nearly free: on a real capture, going from 40,000 points to
+  // 10,000 took lining up 29 photos from 4.2 s to 1.8 s and changed the result by one LED
+  // (430 -> 431 found, both at 0.96). Alignment is averaging over tens of thousands of
+  // samples for a few pixels of shift; it does not need all of them.
+  const MASK_MAX = 10000;
   function lights(white, black, W, H, T) {
     const N = W * H, on = new Float32Array(N);
     for (let p = 0; p < N; p++) on[p] = white[p] - black[p];
