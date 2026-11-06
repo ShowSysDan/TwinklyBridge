@@ -437,15 +437,19 @@ port's real string length and checks its colour order.
    rolling shutter can catch as stripes), first times the camera (LEDs off, then on: how long until the
    camera shows it) and sets its wait from that, then the LEDs flash 28 full-green patterns
    (about 15-25 s for 1,250 LEDs, depending on the camera); keep still until it says
-   *Working it out*. Every photo is checked against the one before; one taken before the
-   LEDs changed is taken again. A hand-held phone drifts - about 20 px over a capture, against
+   *Working it out*. Every photo is checked against the one before, band-passed and only where
+   the LEDs are, so the phone's own exposure drifting over the capture cannot be mistaken for
+   the pattern changing; one taken before the LEDs changed is taken again. A hand-held phone drifts - about 20 px over a capture, against
    LEDs only 3 px across - so every photo is lined up with the all-on photo before decoding:
    the drift is measured on the room's own texture where there is any (and on the LEDs
    otherwise), tracked photo by photo, and taken out with an affine fit that also removes the
    roll from aiming up at the piece. *The phone moved* is only reported when the two all-on
    photos, start and end, no longer match after that.
 5. **Check the capture**: the photo with a dot on every LED found, coloured by port, and a
-   table per port:
+   table per port. Above it is the number worth reading first: *how many LEDs landed next to
+   the one before them on the string*. A bad capture can still "find" plenty of LEDs by
+   putting them anywhere, and the count alone looks healthy when it does; this is what gives
+   it away. Over 85% reads cleanly.
 
    | Column | Meaning |
    |---|---|

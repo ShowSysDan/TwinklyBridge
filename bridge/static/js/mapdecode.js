@@ -545,20 +545,12 @@
     return colours;
   }
 
-  // How different two captures are where LEDs can be: mean |a - b| over the band-passed
-  // picture at the LED spots, as a share of their amplitude. The phone uses it to catch a photo
-  // taken before the LEDs had changed (camera lag), and takes it again. Band-passed, so a
-  // whole-frame exposure shift between the two photos does not read as a change.
-  function change(a, b, white, black) {
-    let d = 0, s = 0;
-    for (let p = 0; p < a.length; p += 3) {
-      const o = white[p] - black[p];
-      if (o < 20) continue;
-      d += Math.abs(a[p] - b[p]); s += o;
-    }
-    return s ? d / s : 1;
-  }
-  // Band-passed version used when the caller knows W/H and the spot list.
+  // How different two photos are where the LEDs are: mean |a - b| over the band-passed picture
+  // at the LED spots, as a share of their amplitude. The phone uses it to catch a photo taken
+  // before the LEDs had changed (camera lag), and takes it again. Band-passed and sampled only
+  // at the dots, so the phone's own exposure and white balance drifting over a 25 s capture
+  // cannot read as a change (nor mask one): measured on a real capture, a genuine change
+  // between consecutive patterns scores 0.15 at worst and a repeat of the last one scores 0.00.
   function changeAt(a, b, W, H, L) {
     const ba = bandpass(a, W, H), bb = bandpass(b, W, H);
     let d = 0, s = 0;
@@ -605,7 +597,7 @@
     return best;
   }
 
-  const api = {decode, decodeBest, grayDecode, change, changeAt, stabilise, shiftOf, lights,
+  const api = {decode, decodeBest, grayDecode, changeAt, stabilise, shiftOf, lights,
                alignedLum, greenness, findSpots, spotThreshold, tophat, bandpass, boxMean, warped, shifted};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.MapDecode = api;

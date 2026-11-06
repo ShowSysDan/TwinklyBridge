@@ -4,6 +4,22 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.12.2] - 2026-11-06
+
+- **The capture now shows how good it is, not just how much it found.** A bad decode can
+  "find" plenty of LEDs by scattering them anywhere, and the count alone looks healthy when it
+  does - the capture that started all this reported 457 of 1250 while fewer than half were
+  really placed. The result page now leads with the share of LEDs that landed next to the one
+  before them on the string (over 85% reads cleanly), and says plainly when the count cannot
+  be trusted. The "less than half found" warning is gone: one view only ever sees the LEDs
+  facing the camera, so half is normal and the warning was noise.
+- **The stale-photo check no longer depends on the phone's exposure.** It compared raw
+  brightness over every pixel the LEDs could reach, which in a lit room is mostly scattered
+  glow, so 25 s of auto-white-balance drift could read as "the pattern changed" or hide that
+  it had not. It is now compared band-passed and only at the LED dots: measured on a real
+  capture, a genuine change between consecutive patterns scores 0.15 at worst and a repeat of
+  the previous pattern scores 0.00, against a threshold of 0.08.
+
 ## [0.12.1] - 2026-11-06
 
 - **A capture sent for diagnosis can now be re-read the way the phone read it.** The pattern

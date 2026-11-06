@@ -558,7 +558,11 @@ async function captureView(ids, angle, reuse) {
       // drifting hand doesn't make a stale photo look new.
       if (shots.black && step !== 'black') {
         L = L || MapDecode.lights(shots.white.lum, shots.black.lum, shots.white.W, shots.white.H);
-        const same = s => MapDecode.change(MapDecode.alignedLum(s.lum, s.W, s.H, L), prevAligned, shots.white.lum, shots.black.lum) < 0.12;
+        // Compared band-passed and only at the LEDs, so the phone's own exposure and white
+        // balance drifting over a 25 s capture cannot read as "the pattern changed" (nor hide
+        // that it did not). Measured on a real capture: a genuine change between consecutive
+        // patterns scores 0.15 at worst, a photo of the previous pattern scores 0.00.
+        const same = s => MapDecode.changeAt(MapDecode.alignedLum(s.lum, s.W, s.H, L), prevAligned, s.W, s.H, L) < 0.08;
         for (let tries = 0; tries < 4 && same(shot); tries++) {
           log.retakes[step] = tries + 1;
           await sleep(settle / 2);
@@ -670,7 +674,15 @@ function showResult() {
     roomWarning(decoded.log.room).replace('<br>', ''),
     decoded.meta.drift >= 1 ? `The phone drifted up to ${decoded.meta.drift} px during the capture; the photos were lined up again.` : '',
     decoded.meta.pitch !== null && Math.abs(decoded.meta.pitch) > 15 ? `<strong class="bad">The phone was tilted ${Math.round(decoded.meta.pitch)}&deg;: for 3D, hold it upright.</strong>` : '',
-    s.found < s.total * 0.5 ? '<strong class="bad">Less than half found: darken the room, get everything in frame, raise the brightness.</strong>' : '',
+    // The honest quality number. A bad decode can "find" plenty of LEDs by scattering them
+    // anywhere, and the count alone looks fine when it does; what gives it away is that LEDs
+    // next to each other on the string no longer land next to each other in the picture.
+    s.inBand !== undefined && s.found > 20
+      ? (s.inBand >= 0.85
+          ? `<strong>${Math.round(s.inBand * 100)}% of LEDs landed next to the one before them on the string</strong> (spacing ${s.stepPx} px): this capture reads cleanly.`
+          : `<strong class="bad">Only ${Math.round(s.inBand * 100)}% of LEDs landed next to the one before them on the string.</strong> Many of the ${s.found} found are in the wrong place, whatever the count says. Get the whole piece in frame, hold the phone still, and send the photos to the bridge if it keeps happening.`)
+      : '',
+    s.found < s.total * 0.3 ? '<strong class="bad">Less than a third found: get everything in frame and raise the brightness. One view only ever sees the LEDs facing the camera, so capture more sides.</strong>' : '',
     'Each string runs red &rarr; yellow &rarr; green &rarr; blue &rarr; violet from its first LED: a right string is one smooth rainbow; a dot in the wrong colour is a misread LED.',
     `Camera lag ${decoded.log.lag.ms} ms, waited ${decoded.log.settle} ms per pattern` +
       (Object.keys(decoded.log.retakes).length ? `, ${Object.keys(decoded.log.retakes).length} photos retaken` : '') +
