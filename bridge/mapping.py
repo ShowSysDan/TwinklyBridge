@@ -143,7 +143,54 @@ def axis_centre(pts, bands=8):
 
 
 SPLINE_MAX_RUN = 6        # LEDs: a longer hidden run goes straight, the curve has nothing to go on
-WRAP_ASPECT = 0.7         # depth extent / width above which the piece is treated as round
+ROUND_ASPECT = 0.65       # across / along, above which the piece is treated as round
+
+
+def _plane(pts):
+    """The vertical plane the piece mostly lies in: its centre in x / z and the horizontal
+    direction along it. Up stays up, so only the x-z spread matters and it is a 2x2 problem."""
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cz = sum(p[2] for p in pts) / n
+    sxx = sum((p[0] - cx) ** 2 for p in pts)
+    szz = sum((p[2] - cz) ** 2 for p in pts)
+    sxz = sum((p[0] - cx) * (p[2] - cz) for p in pts)
+    # larger eigenvalue of [[sxx, sxz], [sxz, szz]] and its direction
+    tr, det = sxx + szz, sxx * szz - sxz * sxz
+    lam = tr / 2 + math.sqrt(max(0.0, tr * tr / 4 - det))
+    ax, az = (lam - szz, sxz) if abs(sxz) > 1e-12 else ((1.0, 0.0) if sxx >= szz else (0.0, 1.0))
+    L = math.hypot(ax, az) or 1.0
+    return cx, cz, ax / L, az / L
+
+
+def _spread(v):
+    """Robust width: the middle 90% of the values."""
+    s = sorted(v)
+    if not s:
+        return 0.0
+    return s[int(0.95 * (len(s) - 1))] - s[int(0.05 * (len(s) - 1))]
+
+
+def across_along(pts, measured=None):
+    """How deep the piece reaches against how wide it spreads, looking down on it: near 1 for a
+    tree, a column or a ball, well under half for a star, a sign or a panel standing up.
+    Judged on the LEDs whose depth was measured where we know which those are - the guessed
+    ones are put where the string must have gone, which flattens the answer towards the shape
+    that was assumed in the first place. This one number decides both how a hidden run is
+    filled in (mapping.fill_gaps) and how the map is flattened for Eos (layout.shape_of)."""
+    firm = [p for i, p in enumerate(pts) if p and (measured is None or measured[i])]
+    if len(firm) < 8:
+        firm = [p for p in pts if p]
+    if len(firm) < 8:
+        return 0.0
+    cx, cz, ax, az = _plane(firm)
+    along = _spread([(p[0] - cx) * ax + (p[2] - cz) * az for p in firm])
+    across = _spread([-(p[0] - cx) * az + (p[2] - cz) * ax for p in firm])
+    return across / along if along > 1e-9 else 0.0
+
+
+def is_round(pts, measured=None):
+    return across_along(pts, measured) >= ROUND_ASPECT
 
 
 def _dist(a, b):
@@ -256,13 +303,7 @@ def fill_gaps(points, ports, n, measured=None, route="auto"):
     if not three:
         route = "flat"
     elif route == "auto":
-        # Is this piece round, or does it have a front and a back? Judge it on the LEDs whose
-        # depth was actually measured: how deep they reach compared with how wide they spread.
-        # A tree or column comes out near 1, a star or panel well under half.
-        firm = [p for i, p in enumerate(out) if p and (measured is None or measured[i])] or known
-        width = (max(p[0] for p in firm) - min(p[0] for p in firm)) or 1e-9
-        depth = max(p[2] for p in firm) - min(p[2] for p in firm)
-        route = "cylinder" if depth / width >= WRAP_ASPECT else "spline"
+        route = "cylinder" if is_round(out, measured) else "spline"
     round_ = route == "cylinder"
     cx, cz = axis_centre(known) if round_ else (sum(p[0] for p in known) / len(known), 0.0)
     spacing = _spacing([p + [0.0] * (3 - len(p)) if p else None for p in out], ports, n, measured) \

@@ -48,7 +48,7 @@ the real-time protocol, which is what this bridge does.
 | **Parameter count** | As soon as a map is in, how many Eos parameters it uses, per controller and in total (see [Parameter count](#parameter-count)) |
 | **Live map** | Every LED drawn where it really is, lit with the frames going out; click one to flash it and read its controller / port / LED |
 | **Auto patch** | Every controller on contiguous universes (170 RGB pixels / 510 channels each), ordered by group offset |
-| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV; 3D maps flattened automatically - a flat piece in its own plane with any back face beside the front, a round one unwrapped around the vertical axis - or front / top / side by hand |
+| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV (with a SOURCE column: measured / estimated / filled); 3D maps flattened automatically - a flat piece in its own plane with any back face beside the front, a round one unwrapped around the vertical axis - or front / top / side by hand |
 | **Runs as a service** | `install.sh` sets up a sandboxed systemd service on Linux that restarts forever; `install.bat` / `run.bat` on Windows |
 | **Access control** | Optional address allowlist, UI password, cross-site request blocking, security headers |
 | **Logging** | Every operator action and every controller fault, to the console / journald, local syslog and optionally a remote syslog server |
@@ -402,12 +402,22 @@ serves the UI on **5120**; set `PORT=5000` in `.env` (Windows / `run.py`) or run
 3. **Patch all, new universe each**: every controller gets contiguous universes, 170 pixels
    (510 channels) per universe, ordered by the controllers' group offset when they report one.
 4. **Export for Eos**: Eos pixel maps are flat, so a 3D map is flattened for the export
-   (the bridge keeps the 3D map). 3D maps default to **Unwrap**: the cylinder or cone cut
-   down the back and opened out, front in the middle, width in proportion to the way round
-   and height down, so a tree becomes a rectangle. **Cone, unrolled exactly** opens it into
-   a fan instead (distances along the surface stay true; needs more cells); **Sphere** uses
-   longitude and latitude; front, top and side views are there too. Preview the grid,
-   download the pixel map CSV. On the desk: File → Import → CSV, include Pixel Maps.
+   (the bridge keeps the 3D map). 3D maps default to **Automatic**, which looks at how deep
+   the measured LEDs reach compared with how wide they spread:
+   - a **round** piece (a tree, a column, a ball) is **unwrapped** - the cylinder or cone cut
+     down the back and opened out, front in the middle, width in proportion to the way round
+     and height down, so a tree becomes a rectangle;
+   - a **flat** piece (a star, a sign, a panel) is laid out **in its own plane** so its shape
+     survives, and if its LEDs really sit in two layers the back one goes beside the front
+     rather than on top of it. Which LEDs are on which face is decided from the ones the
+     camera measured from two angles, because the guessed ones sit between the faces.
+
+   **Cone, unrolled exactly** opens a cone into a fan (distances along the surface stay true;
+   needs more cells); **Sphere** uses longitude and latitude; front, top and side views are
+   there too. Preview the grid, download the pixel map CSV. On the desk: File → Import → CSV,
+   include Pixel Maps. The patch sheet CSV carries a **SOURCE** column per pixel - `measured`,
+   `estimated` (seen from one angle, depth guessed) or `filled` (never seen) - so the
+   programmer can tell a measurement from a guess on the desk.
 5. Set Eos's sACN output to reach the bridge (unicast to the bridge's IP if Eos is on
    another VLAN) and play the pixel map. The bridge's live map should match the wall.
 

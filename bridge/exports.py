@@ -41,12 +41,17 @@ def eos_patch_csv(params):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["CHANNEL", "ADDRESS", "PORT_OFFSET", "MANUFACTURER", "FIXTURE_TYPE", "LABEL",
-                "CONTROLLER", "IP", "LED_INDEX", "PORT", "LED", "DDP_BYTE", "PIXELMAP", "LOCATION_X", "LOCATION_Y"])
+                "CONTROLLER", "IP", "LED_INDEX", "PORT", "LED", "DDP_BYTE", "PIXELMAP", "LOCATION_X",
+                "LOCATION_Y", "SOURCE"])
     for r in rows:
+        # SOURCE says where this pixel's place in the map came from: measured by the camera
+        # from two angles, estimated (seen once, depth guessed) or filled in along the string.
+        label = f"{r['controller']} p{r['port']} #{r['led']}"
         w.writerow([base + r["global_index"], r["address"], f"{r['universe']}/{r['offset']}", mfr,
-                    params.get("fixture_type") or r["profile"], f"{r['controller']} p{r['port']} #{r['led']}",
+                    params.get("fixture_type") or r["profile"],
+                    label if r["source"] == "measured" else f"{label} ({r['source']})",
                     r["controller"], r["ip"], r["index"], r["port"], r["led"], r["ddp"],
-                    r["pixelmap"], r["x"], r["y"]])
+                    r["pixelmap"], r["x"], r["y"], r["source"]])
     return buf.getvalue()
 
 
@@ -63,17 +68,23 @@ def preview_svg(params):
         oy = mi * (maxy * cell + 40)
         mine = [r for r in rows if r["pixelmap"] == pm]
         params = sum(r["bpp"] for r in mine)
+        guessed = sum(1 for r in mine if r["source"] != "measured")
         out.append(f'<text x="8" y="{oy + 16}" fill="#ccc" font-family="sans-serif" font-size="12">'
                    f'Pixel map {pm}: {size["W"]} x {size["H"]} cells, {size["nudged"]} nudged, '
                    f'{straddle or "no"} straddling universe boundaries; {len(mine)} pixels, '
-                   f'{params} parameters</text>')
+                   f'{params} parameters'
+                   + (f'; {len(mine) - guessed} measured, {guessed} guessed (drawn faint)' if guessed else '')
+                   + '</text>')
         for r in rows:
             if r["pixelmap"] != pm:
                 continue
             ci = ctrl_ids.setdefault(r["controller"], len(ctrl_ids))
+            dim = {"measured": 1.0, "estimated": 0.5, "filled": 0.25}.get(r["source"], 1.0)
             out.append(f'<rect x="{20 + (r["x"] - 1) * cell}" y="{oy + 24 + (r["y"] - 1) * cell}" '
-                       f'width="{cell - 1}" height="{cell - 1}" fill="{PALETTE[ci % len(PALETTE)]}">'
+                       f'width="{cell - 1}" height="{cell - 1}" fill="{PALETTE[ci % len(PALETTE)]}" '
+                       f'fill-opacity="{dim}">'
                        f'<title>{escape(r["controller"])} idx {r["index"]} port {r["port"]} led {r["led"]} '
-                       f'addr {r["address"]} ({r["universe"]}/{r["offset"]}) ddp {r["ddp"]}</title></rect>')
+                       f'addr {r["address"]} ({r["universe"]}/{r["offset"]}) ddp {r["ddp"]} '
+                       f'{r["source"]}</title></rect>')
     out.append("</svg>")
     return "\n".join(out)

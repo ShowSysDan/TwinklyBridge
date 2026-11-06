@@ -6,6 +6,7 @@ way the grid is built here (row 0 at the top).
 """
 import math
 
+from .mapping import _plane, _spread, across_along, is_round
 from .state import CONFIG, CONTROLLERS, lock
 
 EOS_UNIVERSE = 512                 # Eos absolute address = (universe - 1) * 512 + offset
@@ -20,7 +21,7 @@ def _axis(pts):
     return cx, cz, r
 
 
-def flatten_points(pts, mode):
+def flatten_points(pts, mode, measured=None):
     """3D -> 2D for the Eos pixel map (Eos maps are flat; the bridge keeps the 3D map).
     xy: front. xz: top. zy: side.
     faces: a flat-ish piece (a star, a sign, a panel) laid out in its OWN plane, so its shape
@@ -34,19 +35,24 @@ def flatten_points(pts, mode):
     cone: a cone unrolled exactly into a fan, apex at the tip: distances along the surface
         stay true, so content drawn in Eos isn't stretched near the top. Uses more cells.
     sphere: longitude across, latitude down (balls).
-    auto: `faces` for a plate-shaped piece, `unwrap` for a round one - see shape_of()."""
+    auto: `faces` for a plate-shaped piece, `unwrap` for a round one - see shape_of().
+    measured: per LED, was its position measured by the camera from two angles or guessed.
+        The front and back of a piece are told apart from the measured LEDs only; the guessed
+        ones fall between the faces and blur the two together."""
     if mode == "auto":
-        mode = shape_of(pts)
+        mode = shape_of(pts, measured)
+        if mode == "unwrap" and _faces_cut(pts, measured) is not None:
+            mode = "faces"           # it has two distinct faces: never unwrap that round an axis
     if mode == "xz":
         return [(p[0], p[2]) for p in pts]
     if mode == "zy":
         return [(p[2], p[1]) for p in pts]
     if mode == "faces":
-        cu, cv, ax, az = _plane(pts)
+        cu, cv, ax, az = _plane([p for p in pts if p])
         u = [(p[0] - cu) * ax + (p[2] - cv) * az for p in pts]        # across the piece
         d = [-(p[0] - cu) * az + (p[2] - cv) * ax for p in pts]       # depth, + is one side
         span = (max(u) - min(u)) or 1.0
-        cut = _two_layers(d)
+        cut = _faces_cut(pts, measured)
         if cut is None:                             # one sheet (tinsel wobbles in depth, but
             return list(zip(u, [p[1] for p in pts]))    # there is no second face): don't split it
         # two layers: the bigger one is the front, the other goes beside it. Left and right stay
@@ -83,60 +89,59 @@ def flatten_points(pts, mode):
     return [(p[0], p[1]) for p in pts]
 
 
-def _plane(pts):
-    """The vertical plane the piece mostly lies in: its centre in x / z and the horizontal
-    direction along it. Up stays up, so only the x-z spread matters and it is a 2x2 problem."""
-    n = len(pts)
-    cx = sum(p[0] for p in pts) / n
-    cz = sum(p[2] for p in pts) / n
-    sxx = sum((p[0] - cx) ** 2 for p in pts)
-    szz = sum((p[2] - cz) ** 2 for p in pts)
-    sxz = sum((p[0] - cx) * (p[2] - cz) for p in pts)
-    # larger eigenvalue of [[sxx, sxz], [sxz, szz]] and its direction
-    tr, det = sxx + szz, sxx * szz - sxz * sxz
-    lam = tr / 2 + math.sqrt(max(0.0, tr * tr / 4 - det))
-    ax, az = (lam - szz, sxz) if abs(sxz) > 1e-12 else ((1.0, 0.0) if sxx >= szz else (0.0, 1.0))
-    L = math.hypot(ax, az) or 1.0
-    return cx, cz, ax / L, az / L
+TWO_FACES = 5.3                    # how far apart two layers must be to be called two faces
 
 
-def _two_layers(d, min_share=0.2, min_gap=0.35):
+def _faces_cut(pts, measured=None):
+    """The depth that separates a piece's front face from its back, or None if it has only
+    one. Fitted on the measured LEDs; every LED is then put on whichever side its own depth
+    falls, which needs nothing to be assumed about the order the string runs in."""
+    have = [p for p in pts if p]
+    if len(have) < 20:
+        return None
+    cu, cv, ax, az = _plane(have)
+    d = [-(p[0] - cu) * az + (p[2] - cv) * ax
+         for i, p in enumerate(pts) if p and (measured is None or measured[i])]
+    return _two_layers(d) if len(d) >= 20 else None
+
+
+def _two_layers(d, min_share=0.15, k=TWO_FACES):
     """Is this piece two separated faces, or one sheet that happens to wobble in depth?
-    Looks for a clear empty band across the depths with a decent share of LEDs either side.
-    Returns the depth to split at, or None for a single sheet."""
+    Splits the depths in two at the point that separates them best, and scores that split as
+    the distance between the two groups' centres in pooled standard deviations. Returns the
+    depth to split at, or None for a single sheet.
+
+    Give it the depths of the LEDs that were MEASURED. The guessed ones sit between the faces
+    (the string has to cross over somewhere, and a guess lands on the way), and measured on
+    the 3D test rig a handful of LEDs in the middle is enough to hide a real gap: the same
+    two-faced star scores 3 to 5 with every LED in, and 9 to 22 on the measured ones alone,
+    against 3.2 to 4.4 for every single-sheet piece tried."""
     s = sorted(d)
     n = len(s)
     if n < 20:
         return None
-    span = (s[int(0.98 * (n - 1))] - s[int(0.02 * (n - 1))]) or 1e-12
-    lo, hi = int(min_share * n), int((1 - min_share) * n)
+    sm = [0.0] * (n + 1)
+    sq = [0.0] * (n + 1)
+    for i, v in enumerate(s):
+        sm[i + 1], sq[i + 1] = sm[i] + v, sq[i] + v * v
     best, at = 0.0, None
-    for i in range(max(1, lo), min(n - 1, hi)):
-        g = s[i + 1] - s[i]
-        if g > best:
-            best, at = g, (s[i] + s[i + 1]) / 2
-    return at if best > min_gap * span else None
+    for i in range(max(1, int(min_share * n)), min(n - 1, int((1 - min_share) * n))):
+        n1, n2 = i + 1, n - i - 1
+        m1, m2 = sm[n1] / n1, (sm[n] - sm[n1]) / n2
+        v1 = max(0.0, sq[n1] / n1 - m1 * m1)
+        v2 = max(0.0, (sq[n] - sq[n1]) / n2 - m2 * m2)
+        pooled = math.sqrt((n1 * v1 + n2 * v2) / n) or 1e-12
+        if abs(m1 - m2) / pooled > best:
+            best, at = abs(m1 - m2) / pooled, (s[i] + s[i + 1]) / 2
+    return at if best > k else None
 
 
-def shape_of(pts):
+def shape_of(pts, measured=None):
     """"faces" for a plate-shaped piece, "unwrap" for a round one. A flat piece has almost all
     its horizontal spread along one direction; a cylinder or cone has it in both equally."""
-    if len(pts) < 8:
+    if len([p for p in pts if p]) < 8:
         return "faces"
-    cx, cz, ax, az = _plane(pts)
-    along = [(p[0] - cx) * ax + (p[2] - cz) * az for p in pts]
-    across = [-(p[0] - cx) * az + (p[2] - cz) * ax for p in pts]
-    a = _spread(along)
-    b = _spread(across)
-    return "unwrap" if a > 1e-9 and b / a > 0.45 else "faces"
-
-
-def _spread(v):
-    """Robust width: the middle 90% of the values."""
-    s = sorted(v)
-    if not s:
-        return 0.0
-    return s[int(0.95 * (len(s) - 1))] - s[int(0.05 * (len(s) - 1))]
+    return "unwrap" if is_round(pts, measured) else "faces"
 
 
 def grid_place(fpts, max_cells=200, width=0):
@@ -213,6 +218,13 @@ def parameter_summary():
             "per_controller": per}
 
 
+def _measured(c):
+    """Per LED of this controller: was its position measured by the camera, or guessed."""
+    n = min(c.n_led, len(c.map or []))
+    guessed = set(c.map_filled or []) | set(c.map_estimated or [])
+    return [i not in guessed for i in range(n)]
+
+
 def pixel_rows(params):
     """One row per LED across all mapped controllers.
     params: pixelmap, flatten (xy|xz|zy|unwrap), arrange (shared|tiled|separate), width, max_cells
@@ -229,7 +241,8 @@ def pixel_rows(params):
     grids = []
     if arrange == "shared":
         allpts = [p for c in ctrls for p in c.map[:c.n_led]]
-        W, H, cells, nudged = grid_place(flatten_points(allpts, flatten), max_cells, width)
+        allmeas = [m for c in ctrls for m in _measured(c)]
+        W, H, cells, nudged = grid_place(flatten_points(allpts, flatten, allmeas), max_cells, width)
         k = 0
         for c in ctrls:
             n = min(c.n_led, len(c.map))
@@ -239,7 +252,8 @@ def pixel_rows(params):
     else:
         xoff, maxh, nud, W, H = 0, 0, 0, 0, 0
         for j, c in enumerate(ctrls):
-            W, H, cells, nudged = grid_place(flatten_points(c.map[:c.n_led], flatten), max_cells, width)
+            W, H, cells, nudged = grid_place(flatten_points(c.map[:c.n_led], flatten, _measured(c)),
+                                             max_cells, width)
             nud += nudged
             if arrange == "separate":
                 grids.append((c, pm0 + j, cells))
@@ -249,6 +263,8 @@ def pixel_rows(params):
                 maxh = max(maxh, H)
         size = ({"W": xoff - 2, "H": maxh, "nudged": nud} if arrange == "tiled"
                 else {"W": W, "H": H, "nudged": nud})
+    source = {c.id: {**{i: "estimated" for i in (c.map_estimated or [])},
+                     **{i: "filled" for i in (c.map_filled or [])}} for c in ctrls}
     rows, straddle, gi = [], 0, 0
     for c, pm, cells in grids:
         start = c.abs_start(cpu)
@@ -262,7 +278,8 @@ def pixel_rows(params):
             rows.append({"pixelmap": pm, "x": col + 1, "y": row + 1, "controller": c.name, "ip": c.ip,
                          "index": i, "global_index": gi, "port": port, "led": led,
                          "universe": u, "offset": s + 1, "address": (u - 1) * EOS_UNIVERSE + s + 1,
-                         "ddp": c.ddp_start + i * c.bpp, "bpp": c.bpp, "profile": c.profile})
+                         "ddp": c.ddp_start + i * c.bpp, "bpp": c.bpp, "profile": c.profile,
+                         "source": source[c.id].get(i, "measured")})
             gi += 1
     return rows, size, straddle
 

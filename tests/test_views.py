@@ -350,3 +350,60 @@ def test_the_map_says_what_was_measured_and_what_was_guessed():
     # with no provenance to hand (one capture, flat map) everything seen counts as measured
     plain = mapping.report(pts, [None] * 250, [[0, 0, 250]], 250)[0]
     assert plain["measured"] == stats["multi_view"] + stats["single_view"] and plain["estimated"] == 0
+
+
+def test_the_faces_are_told_apart_from_the_measured_leds_only():
+    """A piece's front and back are separated by looking at how deep its LEDs sit. The LEDs
+    whose depth was guessed land between the faces - the string has to cross over somewhere,
+    and a guess lands on the way - so a handful of them is enough to hide the gap and fold the
+    back onto the front in the Eos map. Fit the split on the measured LEDs, then put every LED
+    on whichever side its own depth falls: that assumes nothing about the order the string
+    runs in, which is the thing the mapping is there to find out."""
+    import random
+    from bridge.layout import flatten_points, _faces_cut, _two_layers, _plane
+
+    rnd = random.Random(3)
+    front = [[math.cos(2 * math.pi * k / 200) * 0.4, math.sin(2 * math.pi * k / 200) * 0.4, -0.05]
+             for k in range(200)]
+    back = [[p[0], p[1], 0.05] for p in reversed(front)]
+    pts = front + back
+    measured = [True] * 400
+    for k in range(400):               # the camera is not exact, and 45% of the depths are guesses
+        z = pts[k][2] + rnd.gauss(0, 0.008)
+        if rnd.random() < 0.45:
+            z, measured[k] = rnd.uniform(-0.05, 0.05), False
+        pts[k] = [pts[k][0], pts[k][1], z]
+
+    assert _faces_cut(pts, measured) is not None    # measured LEDs: two clear layers
+    assert _faces_cut(pts, None) is None            # everything: the gap is filled in by guesses
+
+    pairs = [(g, 399 - g) for g in range(200)]    # each back LED sits right behind a front one
+
+    def folded(flat):
+        span = max(p[0] for p in flat) - min(p[0] for p in flat)
+        return [(g, h) for g, h in pairs if math.dist(flat[g], flat[h]) < 0.02 * span]
+
+    blind = folded(flatten_points(pts, "auto"))             # no provenance: no split, all folded
+    told = folded(flatten_points(pts, "auto", measured))
+    assert len(blind) == len(pairs) and len(told) < 0.4 * len(blind)
+    # and no pair of LEDs the camera actually measured is folded: every one left is a guess
+    assert all(not (measured[g] and measured[h]) for g, h in told)
+
+
+def test_a_flat_piece_with_things_in_front_of_it_is_not_unwrapped():
+    """A star with a tree standing in front of it and a frame behind reaches about half as far
+    back as it is wide. That is not a cylinder, and unwrapping it round the vertical axis
+    collapses it - but it is deep enough that a tighter test called it round."""
+    from bridge.layout import shape_of, flatten_points
+
+    star = [[0.45 * (0.5 + 0.5 * abs(math.cos(2.5 * 2 * math.pi * k / 400))) * math.cos(2 * math.pi * k / 400),
+             0.45 * (0.5 + 0.5 * abs(math.cos(2.5 * 2 * math.pi * k / 400))) * math.sin(2 * math.pi * k / 400),
+             0.0] for k in range(400)]
+    tree = [[0.1 * math.cos(k / 4.0) - 0.2, -0.3 + 0.4 * k / 80, 0.1 * math.sin(k / 4.0) - 0.25] for k in range(80)]
+    frame = [[-0.4 + 0.8 * k / 60, 0.4, 0.22] for k in range(60)]
+    pts = star + tree + frame
+    assert shape_of(pts) == "faces"
+    f = flatten_points(pts, "auto")
+    wide = max(p[0] for p in f) - min(p[0] for p in f)
+    tall = max(p[1] for p in f) - min(p[1] for p in f)
+    assert 0.8 < wide / tall < 1.3                  # still star-shaped, not two strips

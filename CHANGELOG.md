@@ -4,6 +4,44 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.16.0] - 2026-11-06
+
+**The Eos export stops folding a two-faced piece onto itself, and stops unwrapping a flat one.**
+
+0.14.0 added the `faces` flatten mode and `auto`. Measured against the 3D ground-truth rig,
+neither reached the case they were written for:
+
+- **`auto` sent a star with trees in front of it and a frame behind to `unwrap`** - in all 24
+  of 24 rig runs - because that piece reaches about half as far back as it is wide and the
+  test for "round" was set at 0.45. Unwrapping it around the vertical axis collapses the star
+  into two strips, which is exactly what 0.14.0 was written to prevent. The threshold is now
+  0.65, which sits between everything flat measured (0.10 - 0.52) and everything round
+  (0.76 - 1.08), and the same single rule now decides both how a hidden run is filled in and
+  how the map is flattened, instead of two thresholds that could disagree.
+- **`faces` did not split a genuinely two-faced piece**, so 36% to 68% of its back LEDs
+  landed on top of the front LED hiding them. The old test looked for an empty band in the
+  depths, and the LEDs whose depth the bridge guessed sit in that band - the string has to
+  cross over somewhere, and a guess lands on the way. The split is now found from the
+  **measured** LEDs only, scored as the distance between the two layers in pooled standard
+  deviations: the same star scores 3 to 5 with every LED in and 9 to 22 on the measured ones
+  alone, against 3.2 to 4.4 for every single-sheet piece tried. Over 48 held-out rig sets with
+  fresh geometry, fresh noise, 5% mis-decoded LEDs and both extremes of tinsel transparency,
+  the right decision was taken in 48 of 48, and folded pairs fell to 0.2% - 1.6%.
+
+Each LED is then put on whichever face its own depth falls on, rather than inheriting the
+face of its neighbours along the string: a string that crosses between faces more than once
+would make that inheritance wrong, and the point of the mapping is that you do not have to
+know how the string is routed.
+
+- The patch sheet CSV gains a **SOURCE** column (`measured` / `estimated` / `filled`), also
+  appended to the label, so the programmer can see on the desk which pixels are measurements.
+  The pixel map CSV is unchanged - that file's columns are Eos's own format.
+- The export preview draws estimated pixels at half brightness and filled ones at a quarter,
+  and the title line counts them.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`. If you exported a pixel map from a 3D map before this, export it again.
+
 ## [0.15.0] - 2026-11-06
 
 **3D maps: the depth of a hidden LED is guessed far better, and the map now says which
