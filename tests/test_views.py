@@ -217,3 +217,43 @@ def test_unwrap_for_eos_front_in_the_middle():
         assert math.hypot(x, y) == pytest.approx(math.hypot(p[1], 0.4 * p[1]), rel=1e-6)
     W, H, cells, nudged = grid_place(flatten_points(helix(), "unwrap"))
     assert W > H and nudged <= 3                         # 4 turns round a cylinder: wider than tall
+
+
+def test_a_flat_piece_keeps_its_shape_and_its_back_face():
+    """A star is a flat piece standing upright. Unwrapping it as if it were a cylinder measures
+    the angle round a vertical axis, which every LED shares, so the shape collapses into two
+    edge strips. `faces` lays it out in its own plane instead, and puts a second face beside the
+    front rather than on top of it."""
+    import math
+    from bridge.layout import flatten_points, shape_of, _plane, _two_layers
+
+    def star(n, depth, rev=False):
+        pts = []
+        for k in range(n):
+            t = 2 * math.pi * k / n
+            r = 0.45 * (0.5 + 0.5 * abs(math.cos(2.5 * t)))
+            pts.append([r * math.cos(t), r * math.sin(t), depth])
+        return pts[::-1] if rev else pts
+
+    two_faced = star(250, -0.04) + star(250, 0.04, True)
+    wobbly = [[p[0], p[1], p[2] + 0.15 * math.sin(7 * k / 250.0)] for k, p in enumerate(star(500, 0.0))]
+    tree = [[0.35 * (1 - k / 500.0) * math.cos(k / 8.0), -0.9 * k / 500.0,
+             0.35 * (1 - k / 500.0) * math.sin(k / 8.0)] for k in range(500)]
+
+    assert shape_of(two_faced) == "faces" and shape_of(wobbly) == "faces"
+    assert shape_of(tree) == "unwrap"                      # a round piece still unwraps
+
+    # the front view folds the two faces exactly on top of each other; `faces` does not
+    xy = flatten_points(two_faced, "xy")
+    assert all(math.dist(xy[g], xy[499 - g]) < 1e-9 for g in range(250))
+    fa = flatten_points(two_faced, "auto")
+    span = max(p[0] for p in fa) - min(p[0] for p in fa)
+    assert min(math.dist(fa[g], fa[499 - g]) for g in range(250)) > 0.3 * span
+
+    # a single sheet that merely wobbles in depth is NOT split in two: the star stays a star
+    w = flatten_points(wobbly, "auto")
+    wide = max(p[0] for p in w) - min(p[0] for p in w)
+    tall = max(p[1] for p in w) - min(p[1] for p in w)
+    assert 0.8 < wide / tall < 1.25                        # still roughly square, not two stars
+    cx, cz, ax, az = _plane(wobbly)
+    assert _two_layers([-(p[0] - cx) * az + (p[2] - cz) * ax for p in wobbly]) is None

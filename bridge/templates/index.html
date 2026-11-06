@@ -111,6 +111,8 @@
         <label for="ePm">Pixel map number</label><input type="number" id="ePm" value="1" min="1">
         <label for="eFlat">Flatten</label>
         <select id="eFlat">
+          <option value="auto">Automatic: flat pieces in their own plane, round ones unwrapped</option>
+          <option value="faces">Flatten a flat piece (star, sign, panel); a back face goes beside the front</option>
           <option value="xy">Front view (x across, y down)</option>
           <option value="xz">Top view (x across, z down)</option>
           <option value="zy">Side view (z across, y down)</option>

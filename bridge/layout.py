@@ -23,16 +23,39 @@ def _axis(pts):
 def flatten_points(pts, mode):
     """3D -> 2D for the Eos pixel map (Eos maps are flat; the bridge keeps the 3D map).
     xy: front. xz: top. zy: side.
+    faces: a flat-ish piece (a star, a sign, a panel) laid out in its OWN plane, so its shape
+        survives; whatever is on the back goes beside it as a second region rather than folded
+        on top of the front. Use this for anything plate-shaped.
     unwrap: a cylinder or cone (tree, column) cut down the back and opened out: across = the
         way round the object as seen from the front (front in the middle, left on the left),
         scaled by the median radius so the grid has the object's proportions; down = height.
+        It unrolls around the VERTICAL AXIS, so it is wrong for a flat piece standing upright -
+        every LED is at much the same angle and the shape collapses into two edge strips.
     cone: a cone unrolled exactly into a fan, apex at the tip: distances along the surface
         stay true, so content drawn in Eos isn't stretched near the top. Uses more cells.
-    sphere: longitude across, latitude down (balls)."""
+    sphere: longitude across, latitude down (balls).
+    auto: `faces` for a plate-shaped piece, `unwrap` for a round one - see shape_of()."""
+    if mode == "auto":
+        mode = shape_of(pts)
     if mode == "xz":
         return [(p[0], p[2]) for p in pts]
     if mode == "zy":
         return [(p[2], p[1]) for p in pts]
+    if mode == "faces":
+        cu, cv, ax, az = _plane(pts)
+        u = [(p[0] - cu) * ax + (p[2] - cv) * az for p in pts]        # across the piece
+        d = [-(p[0] - cu) * az + (p[2] - cv) * ax for p in pts]       # depth, + is one side
+        span = (max(u) - min(u)) or 1.0
+        cut = _two_layers(d)
+        if cut is None:                             # one sheet (tinsel wobbles in depth, but
+            return list(zip(u, [p[1] for p in pts]))    # there is no second face): don't split it
+        # two layers: the bigger one is the front, the other goes beside it. Left and right stay
+        # as they are in the room - the back is drawn as if seen THROUGH the piece - so a sweep
+        # across the map crosses both faces the same way round.
+        back = 1 if sum(1 for x in d if x > cut) < sum(1 for x in d if x <= cut) else -1
+        gap = 0.12 * span
+        return [(x + (span + gap if ((dd - cut) * back > 0) else 0), p[1])
+                for x, dd, p in zip(u, d, pts)]
     if mode in ("unwrap", "cone", "sphere"):
         cx, cz, r = _axis(pts)
         ang = [math.atan2(p[0] - cx, p[2] - cz) for p in pts]          # 0 = front, + = to the right
@@ -58,6 +81,62 @@ def flatten_points(pts, mode):
         k = ratios[len(ratios) // 2] if ratios else 1.0
         return [(sl * math.sin(a * k), sl * math.cos(a * k)) for a, sl in zip(ang, slant)]
     return [(p[0], p[1]) for p in pts]
+
+
+def _plane(pts):
+    """The vertical plane the piece mostly lies in: its centre in x / z and the horizontal
+    direction along it. Up stays up, so only the x-z spread matters and it is a 2x2 problem."""
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cz = sum(p[2] for p in pts) / n
+    sxx = sum((p[0] - cx) ** 2 for p in pts)
+    szz = sum((p[2] - cz) ** 2 for p in pts)
+    sxz = sum((p[0] - cx) * (p[2] - cz) for p in pts)
+    # larger eigenvalue of [[sxx, sxz], [sxz, szz]] and its direction
+    tr, det = sxx + szz, sxx * szz - sxz * sxz
+    lam = tr / 2 + math.sqrt(max(0.0, tr * tr / 4 - det))
+    ax, az = (lam - szz, sxz) if abs(sxz) > 1e-12 else ((1.0, 0.0) if sxx >= szz else (0.0, 1.0))
+    L = math.hypot(ax, az) or 1.0
+    return cx, cz, ax / L, az / L
+
+
+def _two_layers(d, min_share=0.2, min_gap=0.35):
+    """Is this piece two separated faces, or one sheet that happens to wobble in depth?
+    Looks for a clear empty band across the depths with a decent share of LEDs either side.
+    Returns the depth to split at, or None for a single sheet."""
+    s = sorted(d)
+    n = len(s)
+    if n < 20:
+        return None
+    span = (s[int(0.98 * (n - 1))] - s[int(0.02 * (n - 1))]) or 1e-12
+    lo, hi = int(min_share * n), int((1 - min_share) * n)
+    best, at = 0.0, None
+    for i in range(max(1, lo), min(n - 1, hi)):
+        g = s[i + 1] - s[i]
+        if g > best:
+            best, at = g, (s[i] + s[i + 1]) / 2
+    return at if best > min_gap * span else None
+
+
+def shape_of(pts):
+    """"faces" for a plate-shaped piece, "unwrap" for a round one. A flat piece has almost all
+    its horizontal spread along one direction; a cylinder or cone has it in both equally."""
+    if len(pts) < 8:
+        return "faces"
+    cx, cz, ax, az = _plane(pts)
+    along = [(p[0] - cx) * ax + (p[2] - cz) * az for p in pts]
+    across = [-(p[0] - cx) * az + (p[2] - cz) * ax for p in pts]
+    a = _spread(along)
+    b = _spread(across)
+    return "unwrap" if a > 1e-9 and b / a > 0.45 else "faces"
+
+
+def _spread(v):
+    """Robust width: the middle 90% of the values."""
+    s = sorted(v)
+    if not s:
+        return 0.0
+    return s[int(0.95 * (len(s) - 1))] - s[int(0.05 * (len(s) - 1))]
 
 
 def grid_place(fpts, max_cells=200, width=0):

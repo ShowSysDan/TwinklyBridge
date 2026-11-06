@@ -4,6 +4,27 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.14.0] - 2026-11-07
+
+**The Eos export no longer folds a flat piece's back face onto its front.**
+
+- `unwrap` does not mean "flatten": it unrolls a cylinder around the VERTICAL AXIS. That is
+  right for the trees and columns it was written for, and wrong for a flat piece standing
+  upright - a star's LEDs all sit at much the same angle round that axis, so the star's shape
+  collapses into two strips at the edges of the map. The export defaulted every 3D map to it.
+- New flatten mode **`faces`**: lay a flat piece out in its OWN plane, so its shape survives.
+  The plane is fitted from the LEDs (so the piece can stand at any angle to the camera), and if
+  the piece really has two layers, the back one is placed beside the front rather than on top
+  of it, keeping left and right as they are in the room. Measured on a synthetic two-faced
+  star: with the front view, all 250 opposite pairs of LEDs land exactly on top of each other;
+  with `faces`, none do.
+- A piece whose LEDs merely wobble in depth - tinsel on a single face - is **not** split in
+  two. Splitting needs a clear empty band across the depths with at least a fifth of the LEDs
+  either side, so one sheet stays one sheet.
+- New flatten mode **`auto`**, and it is now what a 3D map defaults to: `faces` for a
+  plate-shaped piece, `unwrap` for a round one. The test is whether the piece's horizontal
+  spread is along one direction or both.
+
 ## [0.13.1] - 2026-11-06
 
 - The camera page says what the per-pattern wait actually is now (the round trip to the bridge

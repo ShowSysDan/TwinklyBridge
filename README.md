@@ -48,7 +48,7 @@ the real-time protocol, which is what this bridge does.
 | **Parameter count** | As soon as a map is in, how many Eos parameters it uses, per controller and in total (see [Parameter count](#parameter-count)) |
 | **Live map** | Every LED drawn where it really is, lit with the frames going out; click one to flash it and read its controller / port / LED |
 | **Auto patch** | Every controller on contiguous universes (170 RGB pixels / 510 channels each), ordered by group offset |
-| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV; 3D maps flattened front / top / side or unwrapped around the vertical axis |
+| **Eos export** | Pixel Map CSV (address + profile, or channel) and a patch sheet CSV; 3D maps flattened automatically - a flat piece in its own plane with any back face beside the front, a round one unwrapped around the vertical axis - or front / top / side by hand |
 | **Runs as a service** | `install.sh` sets up a sandboxed systemd service on Linux that restarts forever; `install.bat` / `run.bat` on Windows |
 | **Access control** | Optional address allowlist, UI password, cross-site request blocking, security headers |
 | **Logging** | Every operator action and every controller fault, to the console / journald, local syslog and optionally a remote syslog server |
@@ -768,7 +768,7 @@ POST /api/mapping/combine                {"mode": "auto"|"flat"|"around", "mirro
 POST /api/mapping/captures/<name>/<file> one photo (image/png) or the notes (capture.json) of a capture
 GET  /api/mapping/captures               the captures sent from the phone; <name>.zip downloads one; DELETE removes it
 POST /api/mapping/stop
-GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
+GET  /api/export/eos_pixelmap.csv        ?pixelmap=1&flatten=auto|faces|xy|xz|zy|unwrap|cone|sphere&arrange=shared|tiled|separate
                                           &width=0&mode=address|channel&channel_base=1&manufacturer=Generic&fixture_type=RGB
 GET  /api/export/eos_patch.csv           same parameters
 GET  /api/export/eos_preview.svg         same parameters

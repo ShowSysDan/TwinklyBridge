@@ -286,8 +286,9 @@ const canvas = $('#map'), ctx = canvas.getContext('2d');
 let flatTouched = false;
 async function loadMaps() {
   maps = (await api('/api/map')).filter(m => m.points.length);
-  // 3D maps are exported flat: default the Eos export to unwrapping them (until the user picks)
-  if (!flatTouched) $('#eFlat').value = has3D() ? 'unwrap' : 'xy';
+  // 3D maps are exported flat; which way depends on the shape, so let the bridge decide
+  // (a star unwrapped as if it were a cylinder collapses into two strips)
+  if (!flatTouched) $('#eFlat').value = has3D() ? 'auto' : 'xy';
 }
 // 3D maps: drag the live map to turn it (yaw around the vertical axis, pitch over the top).
 let yaw = 0, pitch = 0, drag = null;
