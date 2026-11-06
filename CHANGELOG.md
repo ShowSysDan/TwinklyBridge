@@ -4,6 +4,15 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.12.1] - 2026-11-06
+
+- **A capture sent for diagnosis can now be re-read the way the phone read it.** The pattern
+  photos are held as brightness plus green-ness, but only brightness was written into the
+  uploaded JPEG, so the green-ness - the signal a lit-room capture is usually decoded from -
+  was thrown away. Each pattern photo now also goes up as `<step>_green.jpg`. It is a second
+  grey JPEG rather than one colour one because JPEG stores colour at half resolution, which
+  would blur a 3 px dot. The per-capture file limit goes from 60 to 80 to fit them.
+
 ## [0.12.0] - 2026-11-06
 
 Camera mapping: the decoder rewritten. Measured on a real 1,250-LED capture (a tinsel star in

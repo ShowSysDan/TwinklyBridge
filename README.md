@@ -456,9 +456,11 @@ port's real string length and checks its colour order.
    Dots run red to violet along each string from its first LED: a right string is one
    smooth rainbow; a dot in the wrong colour is a misread LED. If a capture looks wrong,
    **Send photos to the bridge**: every photo goes to `instance/captures/`, and the desk
-   page's *Camera mapping* panel offers them as a zip, to see what the camera saw. (They are
-   sent after every capture anyway while *Send the photos to the bridge after each capture*
-   is ticked, as it is by default.)
+   page's *Camera mapping* panel offers them as a zip, to see what the camera saw. Each
+   pattern photo is sent twice, as what the camera saw (`b0.jpg`) and as its green-ness
+   (`b0_green.jpg`), because a lit room is usually decoded from the green-ness and a capture
+   has to be re-readable the way the phone read it. (They are sent after every capture anyway
+   while *Send the photos to the bridge after each capture* is ticked, as it is by default.)
 6. **Keep this view.** The installation now shows what has been found: **green** in this
    view, **blue** in earlier views, **red** not found yet.
    **Walk around (guided)** does steps 4 to 8 by itself for a 3D piece: it captures and keeps

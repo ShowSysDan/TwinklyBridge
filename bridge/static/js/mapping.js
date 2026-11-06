@@ -685,12 +685,16 @@ function showResult() {
   $('#sendBtn').disabled = false; $('#sendBtn').textContent = 'Send photos to the bridge';
 }
 // Send this capture's photos to the bridge (instance/captures/), to look at what the camera saw.
-function jpegOf(shot) {
+// One photo as a JPEG. `plane` writes a single measurement (green-ness) as a grey picture
+// instead of the camera's colour.
+function jpegOf(shot, plane) {
   const cv = document.createElement('canvas'); cv.width = shot.W; cv.height = shot.H;
   const ctx = cv.getContext('2d'), img = ctx.createImageData(shot.W, shot.H);
   for (let p = 0; p < shot.W * shot.H; p++) {
-    img.data[4 * p] = shot.r ? shot.r[p] : shot.lum[p]; img.data[4 * p + 1] = shot.g ? shot.g[p] : shot.lum[p];
-    img.data[4 * p + 2] = shot.b ? shot.b[p] : shot.lum[p]; img.data[4 * p + 3] = 255;
+    const r = plane ? plane[p] : shot.r ? shot.r[p] : shot.lum[p];
+    const g = plane ? plane[p] : shot.g ? shot.g[p] : shot.lum[p];
+    const b = plane ? plane[p] : shot.b ? shot.b[p] : shot.lum[p];
+    img.data[4 * p] = r; img.data[4 * p + 1] = g; img.data[4 * p + 2] = b; img.data[4 * p + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
   return new Promise(res => cv.toBlob(res, 'image/jpeg', 0.92));      // ~1/10 of a PNG
@@ -701,11 +705,22 @@ async function sendPhotos() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + `_${Math.round(decoded.meta.angle)}deg`;
   try {
     if (!decoded.shots) throw new Error('these photos were already sent and cleared');
-    const names = Object.keys(decoded.shots);
-    for (let i = 0; i < names.length; i++) {
-      btn.textContent = `Sending ${i + 1} / ${names.length + 1} ...`;
-      const r = await fetch(`/api/mapping/captures/${stamp}/${names[i]}.jpg`,
-                            {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: await jpegOf(decoded.shots[names[i]])});
+    // The pattern photos are kept as brightness plus green-ness, and only the colour photos
+    // keep red / green / blue. Writing brightness into all three channels of the JPEG would
+    // throw the green-ness away -- and that is the signal most captures are actually decoded
+    // from, so a capture sent for diagnosis could not be re-read the way the phone read it.
+    // Each pattern photo therefore also goes up as <step>_green.jpg. (A second grey JPEG, not
+    // a colour one: JPEG stores colour at half resolution, which would blur a 3 px dot.)
+    const files = [];
+    for (const n of Object.keys(decoded.shots)) {
+      const shot = decoded.shots[n];
+      files.push([`${n}.jpg`, () => jpegOf(shot)]);
+      if (!shot.r && shot.chroma) files.push([`${n}_green.jpg`, () => jpegOf(shot, shot.chroma)]);
+    }
+    for (let i = 0; i < files.length; i++) {
+      btn.textContent = `Sending ${i + 1} / ${files.length + 1} ...`;
+      const r = await fetch(`/api/mapping/captures/${stamp}/${files[i][0]}`,
+                            {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: await files[i][1]()});
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
     }
     const info = {session: session, stats: decoded.stats, log: decoded.log, meta: decoded.meta,

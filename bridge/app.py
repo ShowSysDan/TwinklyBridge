@@ -380,7 +380,7 @@ def api_capture_upload(name, fname):
     if not body:                                       # a cut-off upload: don't store an empty file
         return jsonify(error="empty upload"), 400
     d = os.path.dirname(path)
-    if os.path.isdir(d) and len(os.listdir(d)) >= 60:
+    if os.path.isdir(d) and len(os.listdir(d)) >= 80:   # 29 photos + a green plane each + capture.json
         return jsonify(error="too many files in this capture"), 413
     os.makedirs(d, exist_ok=True)
     with open(path, "wb") as f:
