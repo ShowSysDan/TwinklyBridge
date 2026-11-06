@@ -112,16 +112,30 @@ def test_a_hand_held_phone_in_the_dark():
     assert d["stab"]["drift"] > 10 and not d["stab"]["unaligned"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Known limit: a blacked-out room, a hand-held phone, and LEDs that are bare dots with no "
-    "bloom at all. There is then nothing in the picture to line the photos up on except the "
-    "LEDs, and a coding photo lights only half of them, so any shift that maps the string onto "
-    "itself scores exactly as well as the true one. Room light (test above) or any bloom at all "
-    "(hardshake) resolves it. The result degrades visibly -- a few dozen LEDs instead of a "
-    "thousand -- rather than silently producing a confident wrong map."))
 def test_a_hand_held_phone_in_a_blacked_out_room():
+    """The hardest case: a blacked-out room, hand-held, and LEDs that are bare dots with no
+    bloom - so the only thing in the picture to line the photos up on is the LEDs themselves.
+    This used to fail, because the coarse search stepped four pixels at a time: an LED is about
+    a pixel and a half across, so a drift landing two pixels off that step was invisible to it
+    and it answered with something nine pixels wrong. It steps one pixel now."""
     d = run_sim("shake")
-    assert d["stats"]["found"] > 950 and d["wrong"] == 0
+    assert d["stats"]["found"] > 950 and d["wrong"] == 0 and d["meanErr"] < 1.0
+    assert d["stab"]["drift"] > 10 and not d["stab"]["unaligned"]
+
+
+def test_drift_is_found_whatever_fraction_of_a_pixel_it_lands_on():
+    """The bug above, directly: slide one photo by a known 0 to 8 px and check every one comes
+    back. It failed at exactly 2 and 6 px before - a mod-4 signature, not noise."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    out = subprocess.run([node, os.path.join(ROOT, "tests", "js", "shift_probe.js"),
+                          os.path.join(ROOT, "bridge", "static", "js", "mapdecode.js")],
+                         capture_output=True, text=True, timeout=300, check=True)
+    got = json.loads(out.stdout)
+    # the old coarse search gave 22.9 px here, failing at offsets 2, 6 and 10 and nowhere else
+    assert got["worst_error_px"] < 1.0, got
+    assert got["z_evenness"] > 0.5, got      # and it was no less sure of the wrong answers
 
 
 def test_decoder_on_synthetic_camera():

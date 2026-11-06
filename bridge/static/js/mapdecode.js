@@ -135,7 +135,7 @@
   // 10,000 took lining up 29 photos from 4.2 s to 1.8 s and changed the result by one LED
   // (430 -> 431 found, both at 0.96). Alignment is averaging over tens of thousands of
   // samples for a few pixels of shift; it does not need all of them.
-  const MASK_MAX = 10000;
+  const MASK_MAX = 10000, COARSE_PTS = 1500;
   function lights(white, black, W, H, T) {
     const N = W * H, on = new Float32Array(N);
     for (let p = 0; p < N; p++) on[p] = white[p] - black[p];
@@ -157,32 +157,21 @@
     const step = Math.max(1, Math.ceil(src.length / MASK_MAX));
     const pts = new Int32Array(Math.ceil(src.length / step));
     for (let i = 0, j = 0; i < src.length; i += step) pts[j++] = src[i];
-    const qw = W >> 2, seen = new Set(), ptsQ = [];
-    for (const p of pts) {
-      const q = (((p / W) | 0) >> 2) * qw + ((p % W) >> 2);
-      if (!seen.has(q)) { seen.add(q); ptsQ.push(q); }
-    }
+    // a much smaller list for the coarse search, which tests hundreds of offsets
+    const cstep = Math.max(1, Math.ceil(pts.length / COARSE_PTS));
+    const ptsC = new Int32Array(Math.ceil(pts.length / cstep));
+    for (let i = 0, j = 0; i < pts.length; i += cstep) ptsC[j++] = pts[i];
     let x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (const s of spots) {
       if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x;
       if (s.y < y0) y0 = s.y; if (s.y > y1) y1 = s.y;
     }
-    return {spots, pts, ptsQ: Int32Array.from(ptsQ), ref, on, th: found.th, W, H,
+    return {spots, pts, ptsC, ref, on, th: found.th, W, H,
             count: spots.length, usingBackground: src !== core,
             box: x1 < 0 ? null : [x0, y0, x1, y1]};
   }
 
   // ------------------------------------------------------------------ lining the photos up
-  function quarter(a, W, H) {
-    const w = W >> 2, h = H >> 2, o = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      let s = 0;
-      for (let dy = 0; dy < 4; dy++) { const r = (4 * y + dy) * W + 4 * x; s += a[r] + a[r + 1] + a[r + 2] + a[r + 3]; }
-      o[y * w + x] = s / 16;
-    }
-    return {d: o, w, h};
-  }
-
   // Mean |frame - reference| over the mask, at a whole-pixel offset. Lower is better.
   function sad(img, ref, W, H, pts, dx, dy, from, to) {
     let s = 0, n = 0;
@@ -195,9 +184,9 @@
     return n > 16 ? s / n : Infinity;
   }
 
-  // Drift of `img` against the all-on reference: {dx, dy, z}. Coarse at quarter size, then
-  // +-4 px at full size, then a parabola for the fraction of a pixel. z is how far the best
-  // score stands out from the rest, in standard deviations.
+  // Drift of `img` against the all-on reference: {dx, dy, z}. A whole-pixel search over a
+  // thinned mask, then +-1 px over the full mask, then a parabola for the fraction of a pixel.
+  // z is how far the best score stands out from the rest, in standard deviations.
   // Each photo is searched around where the PREVIOUS one landed, never over the whole range.
   // A hand drifts continuously -- measured on a real capture, ~4 px between consecutive photos,
   // 8 px at the 90th percentile, ~22 px end to end -- so a +-16 px window always contains the
@@ -216,37 +205,34 @@
   function shiftOf(img, W, H, L, maxShift, near) {
     maxShift = maxShift === undefined ? MAX_SHIFT : maxShift;
     const nx = near ? Math.round(near.dx) : 0, ny = near ? Math.round(near.dy) : 0;
-    const cxq = Math.round(nx / 4), cyq = Math.round(ny / 4);
     const bp = bandpass(img, W, H);
-    const q = quarter(bp, W, H), qr = quarter(L.ref, W, H), m = Math.ceil(maxShift / 4);
+    // The coarse search steps a WHOLE PIXEL. It used to run on a quarter-size copy, which can
+    // only test shifts that are multiples of 4 px; an LED is a ~1.3 px dot, so when the true
+    // shift sat about 2 px off that lattice the real minimum was invisible to the coarse grid
+    // and it returned an arbitrary offset, ~9 px out - far outside what the fine pass could
+    // rescue. It failed at exactly 2 and 6 px of drift and nowhere else, a clean mod-4
+    // signature. Searching whole pixels over a thinned mask instead costs less than the
+    // downsampling did, and it is why a hand-held phone in a dark room now works at all.
     const grid = [];
-    let best = Infinity, bx = cxq, by = cyq;
-    for (let dy = cyq - m; dy <= cyq + m; dy++) for (let dx = cxq - m; dx <= cxq + m; dx++) {
-      let s = 0, n = 0;
-      for (let i = 0; i < L.ptsQ.length; i++) {
-        const p = L.ptsQ[i], x = (p % q.w) + dx, y = ((p / q.w) | 0) + dy;
-        if (x < 0 || y < 0 || x >= q.w || y >= q.h) continue;
-        const d = q.d[y * q.w + x] - qr.d[p];
-        s += d < 0 ? -d : d; n++;
-      }
-      const v = n > 16 ? s / n : Infinity;
-      if (isFinite(v)) grid.push([dx, dy, v]);
+    let best = Infinity, bx = nx, by = ny;
+    for (let dy = ny - maxShift; dy <= ny + maxShift; dy++) for (let dx = nx - maxShift; dx <= nx + maxShift; dx++) {
+      const v = sad(bp, L.ref, W, H, L.ptsC, dx, dy, 0, L.ptsC.length);
+      if (!isFinite(v)) continue;
+      grid.push([dx, dy, v]);
       if (v < best) { best = v; bx = dx; by = dy; }
     }
-    // How clearly the match stands out: measured against the positions well away from it, not
-    // against the whole grid. The scores right next to the best one are nearly as low whatever
-    // the picture, so including them inflates the spread and makes a good match look doubtful
-    // -- and how much they weigh depends on how wide the search was, which must not change the
-    // verdict.
-    const far = grid.filter(g => Math.abs(g[0] - bx) > 2 || Math.abs(g[1] - by) > 2).map(g => g[2]);
+    // How clearly the match stands out: measured against the offsets well away from it. The
+    // scores right next to the best are nearly as low whatever the picture, so including them
+    // inflates the spread and makes a good match look doubtful - and how much they weigh would
+    // depend on how wide the search was, which must not change the verdict.
+    const far = grid.filter(g => Math.abs(g[0] - bx) > 4 || Math.abs(g[1] - by) > 4).map(g => g[2]);
     const mean = far.reduce((a, b) => a + b, 0) / (far.length || 1);
     const sd = Math.sqrt(far.reduce((a, b) => a + (b - mean) ** 2, 0) / (far.length || 1)) || 1;
     const z = far.length >= 8 ? (mean - best) / sd : 0;
     const n = L.pts.length;
     const f = (dx, dy) => sad(bp, L.ref, W, H, L.pts, dx, dy, 0, n);
-    let fb = Infinity, fx = 4 * bx, fy = 4 * by;
-    fb = f(fx, fy);
-    for (let dy = 4 * by - 4; dy <= 4 * by + 4; dy++) for (let dx = 4 * bx - 4; dx <= 4 * bx + 4; dx++) {
+    let fx = bx, fy = by, fb = f(bx, by);
+    for (let dy = by - 1; dy <= by + 1; dy++) for (let dx = bx - 1; dx <= bx + 1; dx++) {
       const s = f(dx, dy);
       if (s < fb) { fb = s; fx = dx; fy = dy; }
     }

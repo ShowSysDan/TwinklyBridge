@@ -4,6 +4,25 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.13.0] - 2026-11-06
+
+- **Mapping now works hand-held in a dark room too, and lining the photos up got faster.** The
+  coarse stage of the alignment ran on a quarter-size copy of the picture, so it could only
+  test shifts that were multiples of 4 px. An LED is about 1.3 px across, so a drift that
+  landed about 2 px off that step was invisible to it: it returned an arbitrary offset around
+  9 px out, far beyond what the fine pass could rescue. It failed at drifts of 2, 6 and 10 px
+  and was exact everywhere else - a mod-4 signature, which is why it looked like noise. The
+  coarse search now steps a whole pixel over a thinned mask, which costs less than the
+  downsampling it replaces. In the synthetic dark-room hand-held case that is 76 LEDs found
+  with 54 misplaced, against **1127 found and none misplaced**, the same as that scene gives
+  with the phone on a tripod. The real-capture result is unchanged (431 at 0.96) and lining up
+  a 29-photo capture goes from 1.75 s to 1.55 s. The expected-failure test from 0.12.0 is now
+  a passing one.
+- A direct regression test for it (`tests/js/shift_probe.js`): slide one photo by every whole
+  number of pixels from 0 to 12 and check each comes back. The old code gives 22.9 px of error
+  at its worst and is no less confident when it is wrong; a test that tries only one drift
+  cannot see a fault like this.
+
 ## [0.12.4] - 2026-11-06
 
 - **Each photo is lined up once during a capture instead of three times.** The check for a

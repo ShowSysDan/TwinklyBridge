@@ -427,8 +427,8 @@ port's real string length and checks its colour order.
    end up in one coordinate space, so the Eos export can lay them out as one map.
 3. **Open the camera** and allow camera and motion access (motion gives the compass and tilt
    readouts). Frame the whole installation and hold the phone still: a tripod, or leaned
-   against something. A lit room is fine; the room's own texture is what the drift is measured
-   against, so a warehouse with the lights on maps better than a blacked-out one.
+   against something. A lit room is fine: the room's own texture gives the drift something to
+   be measured against, so a warehouse with the lights on works as well as a dark one.
    While you aim, the LEDs blink and the preview rings each LED the camera can see in green,
    red where it is too bright (clipped), and warns if LEDs reach the edge of the picture. The
    rings sit on the LEDs and never cover the picture, so you can still see what you are aiming at.
