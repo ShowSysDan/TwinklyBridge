@@ -389,6 +389,18 @@ async function settled(max = 4000) {
   }
   return prev;
 }
+// Wait until `settle` ms after the step was ISSUED. The LEDs change partway through the round
+// trip, so counting from the reply makes the real wait depend on how long the network took.
+// Every step's round trip, so a capture that ran slow can be explained afterwards instead of
+// guessed at: the one round trip cameraLag() measures is a single sample of the biggest single
+// line item in a capture.
+let stepRoundTrips = [];
+function waitAfterStep(sent, settle) {
+  const rt = performance.now() - sent;
+  stepRoundTrips.push(Math.round(rt));
+  return sleep(Math.max(40, settle - rt));
+}
+
 async function cameraLag(sessionId) {
   // the LEDs went dark at start; the camera shows it some unknown time later, and until then
   // its picture is just as still, so first give it longer than any phone's lag
@@ -403,11 +415,13 @@ async function cameraLag(sessionId) {
   if (lit < 40 * dark.length / 21600)          // about two LEDs' worth at 240 x 90
     throw new Error('The camera sees no change when the LEDs come on: point it at the installation, darken the room, and check the controllers are ticked.');
   const reach = samples.find(s => s[1] >= 0.9 * lit);
-  // measured from BEFORE the request, because the bridge starts sending the new frame while the
-  // request is still in flight: timing from the reply makes the lag look shorter than it is by
-  // however long the round trip took, and any later step with a faster round trip then
-  // photographs the previous pattern.
-  return {ms: Math.round(reach[0] + (t1 - t0)), roundTrip: Math.round(t1 - t0)};
+  // `ms` is the camera's own lag, measured from the reply; `roundTrip` is kept beside it
+  // because the two are spent differently. The bridge starts sending the new frame while the
+  // request is still in flight, so the wait has to be counted from the REQUEST (see the
+  // capture loop) or a later step whose round trip comes back faster photographs the previous
+  // pattern. But only the camera's lag deserves a safety factor: multiplying the round trip
+  // too would add a third of it to the wait for every pattern, for nothing.
+  return {ms: Math.round(reach[0]), roundTrip: Math.round(t1 - t0)};
 }
 // Pick the LED level for the coding patterns from what the camera sees. Dimming LEDs is PWM
 // (switching them on and off fast), which a phone's rolling shutter can catch as stripes;
@@ -416,14 +430,16 @@ async function cameraLag(sessionId) {
 // sensor's maximum. Take the brightest level that doesn't flicker and hardly clips.
 const LEVELS = [255, 160, 96, 56, 32];
 async function chooseLevel(sessionId, settle) {
+  let sent = performance.now();
   await api('/api/mapping/step', {session: sessionId, step: 'black'});
-  await sleep(settle);
+  await waitAfterStep(sent, settle);
   const dark = await grab(2, true);
   const tried = [];
   let mask = null, spots = null;                       // where the LEDs are (for lining photos up)
   for (const L of LEVELS) {
+    sent = performance.now();
     await api('/api/mapping/step', {session: sessionId, step: 'white', level: L});
-    await sleep(settle);
+    await waitAfterStep(sent, settle);
     const a0 = await grab(1, true);
     await sleep(70);
     const b0 = await grab(1, true);
@@ -516,6 +532,7 @@ async function captureView(ids, angle, reuse) {
   const minWait = Math.max(50, +$('#settle').value || 300);
   const atStart = {heading: sensor.heading, pitch: sensor.pitch, angle};
   const log = {retakes: {}, started: new Date().toISOString(), ua: navigator.userAgent};
+  stepRoundTrips = [];
   try {
     progress(0, 1, 'Taking over the controllers ...');
     session = await api('/api/mapping/start', {ids, level: +$('#level').value});
@@ -528,7 +545,7 @@ async function captureView(ids, angle, reuse) {
     } else {
       progress(0, 1, 'Timing the camera ...');
       lag = await cameraLag(session.session);
-      settle = Math.max(minWait, Math.round(lag.ms * 1.3) + 60);
+      settle = Math.max(minWait, lag.roundTrip + Math.round(lag.ms * 1.3) + 60);
       progress(0, 1, 'Choosing the LED level ...');
       level = await chooseLevel(session.session, settle);
     }
@@ -536,8 +553,9 @@ async function captureView(ids, angle, reuse) {
     log.lag = lag; log.settle = settle; log.level = level; log.reused = !!reuse;
     aim.blinkLevel = level.level;
     // all-on first at that level: let exposure settle on the LEDs, then lock it (where allowed)
+    const sentWhite = performance.now();
     await api('/api/mapping/step', {session: session.session, step: 'white', level: level.level});
-    await sleep(settle);
+    await waitAfterStep(sentWhite, settle);
     const shots = {};
     shots.white = await grab(4, true);
     log.locked = await lockCamera(shots.white);
@@ -550,7 +568,7 @@ async function captureView(ids, angle, reuse) {
       progress(i + 1, order.length + 1, `Hold still ... ${i + 1} / ${order.length}`);
       const sent = performance.now();
       await api('/api/mapping/step', {session: session.session, step});
-      await sleep(Math.max(40, settle - (performance.now() - sent)));   // settle counts from the request
+      await waitAfterStep(sent, settle);
       const colour = ['black', 'red', 'green', 'blue'].includes(step);
       let shot = await grab(step === 'black' ? 4 : 2, colour);
       // a photo that hardly differs from the last one was taken before the LEDs changed
@@ -588,7 +606,9 @@ async function captureView(ids, angle, reuse) {
     progress(order.length + 1, order.length + 1, 'Steadying the photos ...');
     await sleep(30);
     // line every photo up with the all-on one: hand-held drift is undone before decoding
-    const st = MapDecode.stabilise(shots);
+    const rts = stepRoundTrips.slice().sort((a, b) => a - b);
+    if (rts.length) log.roundTrips = {n: rts.length, min: rts[0], median: rts[rts.length >> 1], max: rts[rts.length - 1]};
+    const st = MapDecode.stabilise(shots, {order: Object.keys(shots)});
     log.stabilise = {drift: st.drift, unaligned: st.unaligned, shifts: st.shifts, box: st.box};
     log.room = roomLevel(shots.black.lum);
     progress(order.length + 1, order.length + 1, 'Working it out ...');

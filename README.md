@@ -435,7 +435,10 @@ port's real string length and checks its colour order.
 4. **Capture.** The phone picks the LED level (it tries 255 down to 32 and takes the brightest
    that neither flickers on this camera nor clips: dimming LEDs is PWM, which a phone's
    rolling shutter can catch as stripes), first times the camera (LEDs off, then on: how long until the
-   camera shows it) and sets its wait from that, then the LEDs flash 28 full-green patterns
+   camera shows it) and sets its wait from that plus the measured round trip to the bridge,
+   counted from when each pattern is sent rather than when the bridge answers - the LEDs change
+   while the request is still in flight, so a step that answers quickly would otherwise be
+   photographed too early. Then the LEDs flash 28 full-green patterns
    (about 15-25 s for 1,250 LEDs, depending on the camera); keep still until it says
    *Working it out*. Every photo is checked against the one before, band-passed and only where
    the LEDs are, so the phone's own exposure drifting over the capture cannot be mistaken for
@@ -538,9 +541,14 @@ LED's dot minus the ring around it), where that smooth glow cancels and the LED'
 what is left. The phone shows how bright it measures the room.
 
 Tips: keep the phone still; that matters more than anything else. The
-wait after each pattern is measured per capture (camera lag x 1.3); if the result shows many
-*photos retaken* or stops with *the camera isn't keeping up*, raise *Shortest wait after
-each pattern*. If dots are scattered or strings aren't smooth rainbows, *Send photos to the
+wait after each pattern is measured per capture (the round trip to the bridge, plus the camera's
+own lag with a margin); if the result shows many *photos retaken* or stops with *the camera
+isn't keeping up*, raise *Shortest wait after each pattern*.
+
+**Connect the phone to the bridge directly, not through a VPN.** The result line reports the
+round trip it measured. Most of a capture is spent waiting for it: on a LAN it should be tens
+of milliseconds, and every 100 ms of it costs about 3 s on a 1,250-LED capture. A capture that
+takes 30 s over a tunnel takes well under half that on the same network. If dots are scattered or strings aren't smooth rainbows, *Send photos to the
 bridge* and look at (or share) the zip: the photos show what the camera actually saw.
 
 How it works: every LED gets a number, written in Gray code, one bit per pattern and each

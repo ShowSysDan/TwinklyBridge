@@ -4,6 +4,25 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
+## [0.12.3] - 2026-11-06
+
+Capture time. Measured end to end, most of a capture is not photography or arithmetic: it is
+waiting for the round trip to the bridge, and for a wait sized from it.
+
+- **Only the camera's lag gets the safety margin now, not the round trip.** 0.12.0 folded the
+  round trip into the measured "camera lag" so that the wait could be counted from sending a
+  pattern rather than from the bridge's answer - which is right, because the LEDs change while
+  the request is still in flight - but the 1.3x margin then applied to the round trip as well.
+  On a 440 ms link that turned a 150 ms wait into 697 ms on every one of 33 patterns. The wait
+  is now `round trip + 1.3 x camera lag + 60 ms`, counted from sending, and every wait after a
+  step subtracts how long that step actually took, so a quick answer is not punished and a slow
+  one is compensated.
+- **Every step's round trip is recorded and reported**, not just the one sample the camera
+  timing happened to take. The result line now shows the median and range. This is the biggest
+  single line item in a capture and it was invisible.
+- README: connect the phone to the bridge directly rather than through a VPN. Every 100 ms of
+  round trip costs about 3 s on a 1,250-LED capture.
+
 ## [0.12.2] - 2026-11-06
 
 - **The capture now shows how good it is, not just how much it found.** A bad decode can
