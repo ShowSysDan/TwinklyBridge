@@ -666,9 +666,13 @@ function stopCamera() {
 
 // ---------------------------------------------------------------- one capture's result
 function portTable(rep, sofar) {
+  // "Seen" counts every LED the camera found; "Guessed" is the rest of the string, put where
+  // the wire must have gone. "Run" is the longest stretch with no measurement in it at all -
+  // the honest measure of how much of a port is standing on an assumption.
   return rep.map(c => `<h3>${esc(c.name)}: ${c.found} seen${sofar ? ' so far' : `, ${c.filled} to fill`}</h3>
-    <table class="rep"><tr><th>Port</th><th>Set</th><th>Seen</th><th>${sofar ? 'Last seen' : 'Ends at'}</th><th>Colours</th><th></th></tr>
+    <table class="rep"><tr><th>Port</th><th>Set</th><th>Seen</th><th>Guessed</th><th>Run</th><th>${sofar ? 'Last seen' : 'Ends at'}</th><th>Colours</th><th></th></tr>
     ${c.ports.map(p => `<tr class="${p.ok ? '' : 'warn'}"><td>${p.port}</td><td>${p.configured}</td><td>${p.found}</td>
+      <td>${(p.estimated || 0) + (p.never_seen || 0)}</td><td>${p.longest_unmeasured_run || 0}</td>
       <td>${p.last_seen || '-'}</td><td>${esc(p.colour_order || '?')}</td><td>${p.ok ? 'OK' : esc(p.notes.join('; '))}</td></tr>`).join('')}
     </table>`).join('');
 }
@@ -938,19 +942,30 @@ async function build() {
   show('built');
   const st = built.stats, three = built.mode === 'around';
   $('#builtTitle').textContent = three ? `3D map from ${built.views.length} views` : `Map from ${built.views.length} view${built.views.length > 1 ? 's' : ''}`;
-  drawPreview($('#pvFront'), built.points, 0, 1);
-  drawPreview($('#pvTop'), built.points, 0, 2);
+  drawPreview($('#pvFront'), built.points, 0, 1, built.measured);
+  drawPreview($('#pvTop'), built.points, 0, 2, built.measured);
   $('#pvTop').parentElement.hidden = !three;
+  const total = st.multi_view + st.single_view + st.unseen;
+  const clamped = built.views.filter(v => v.clamped).length;
+  // Lead with what was NOT measured. The count of LEDs seen from several angles goes up when
+  // you stand still and take the same photo twice, so it is a bad headline; what matters is
+  // how much of the map is a guess, because that is where every front/back mistake lives.
   $('#builtText').innerHTML = [
-    three ? `${st.multi_view} LEDs placed from two or more angles, ${st.single_view} from one angle (depth estimated from
-             their neighbours), ${st.unseen} not seen (filled in along their string).`
+    three ? `<strong>${st.unseen} of ${total} LEDs were never photographed</strong> and are filled in along their
+             string; ${st.single_view} were seen from one angle only, so their depth is estimated from the string
+             either side. ${st.multi_view} were measured from two or more angles.`
           : `${st.multi_view} LEDs seen in more than one view, ${st.unseen} not seen (filled in along their string).`,
+    three && built.views.length <= 2 ? `Only two views: an LED seen in both is still only seen from one side of the
+             piece, so "measured" here does not yet mean front and back are told apart. Walk further round.` : '',
     three ? `Angles used: ${built.views.map(v => `${v.angle}&deg;${Math.abs(v.refined_angle - v.angle) >= 1 ? ` (&rarr; ${v.refined_angle}&deg;)` : ''}`).join(', ')}.` : '',
+    clamped ? `<span class="warn">${clamped === 1 ? 'One view did' : clamped + ' views did'} not fit the angle you gave,
+             even after moving it the full 15&deg;. A compass reads badly near metal: re-run and type the angles
+             yourself, or re-take ${clamped === 1 ? 'that view' : 'those views'}.</span>` : '',
     three ? 'If the top view looks mirrored compared with the real object (e.g. you walked left instead of right), press <em>Flip</em>.' : '',
   ].filter(Boolean).join('<br>');
   $('#flipBtn').hidden = !three;
 }
-function drawPreview(cv, pts, a, b) {
+function drawPreview(cv, pts, a, b, measured) {
   const W = 300, H = 300, ctx = cv.getContext('2d');
   cv.width = W; cv.height = H;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
@@ -960,7 +975,10 @@ function drawPreview(cv, pts, a, b) {
   const s = 270 / Math.max(hi[a] - lo[a], hi[b] - lo[b], 1e-9);
   pts.forEach((p, i) => {
     if (!p) return;
-    ctx.fillStyle = `hsl(${(i / pts.length) * 300}, 90%, 60%)`;      // colour along the chain
+    // Solid where the position was measured from two angles, faint where the depth is a
+    // guess: on the test rig every front/back mistake is in the faint ones.
+    const firm = !measured || measured[i];
+    ctx.fillStyle = `hsl(${(i / pts.length) * 300}, 90%, 60%, ${firm ? 1 : 0.3})`;
     ctx.fillRect(15 + (p[a] - lo[a]) * s, 15 + (p[b] - lo[b]) * s, 2, 2);
   });
 }
@@ -971,7 +989,7 @@ $('#saveBtn').onclick = async () => {
   $('#saveBtn').disabled = true;
   try {
     const r = await api('/api/mapping/combine', {mode: 'auto', mirror, save: true});
-    toast(`Saved: ${r.controllers.map(c => `${c.name} ${c.found} seen + ${c.filled} filled`).join(', ')}.`, 6000);
+    toast(`Saved: ${r.controllers.map(c => `${c.name} ${c.measured} measured + ${c.estimated + c.filled} guessed`).join(', ')}.`, 6000);
     stopCamera(); session = null;
     showCheck(r.mode === 'around');
   } catch (e) { toast(e.message); }

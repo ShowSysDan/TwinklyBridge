@@ -257,3 +257,96 @@ def test_a_flat_piece_keeps_its_shape_and_its_back_face():
     assert 0.8 < wide / tall < 1.25                        # still roughly square, not two stars
     cx, cz, ax, az = _plane(wobbly)
     assert _two_layers([-(p[0] - cx) * az + (p[2] - cz) * ax for p in wobbly]) is None
+
+
+def two_faced_panel(n=250, w=0.6, h=0.6, d=0.05):
+    """One string across the front of a flat panel in rows, over the rim, back across the rear:
+    the routing a star or a sign most often has, and the hardest front/back case there is,
+    because each back LED sits almost exactly behind a front one."""
+    pts, half, cols = [], n // 2, 25
+    rows = max(1, half // cols)
+    for k in range(n):
+        j = k if k < half else n - 1 - k
+        row, col = divmod(j, cols)
+        x = 0.5 - w / 2 + w * (col if row % 2 == 0 else cols - 1 - col) / (cols - 1)
+        pts.append([x, 0.2 + h * row / max(1, rows - 1), -d if k < half else d])
+    return pts
+
+
+def panel_views(truth, angles, keep=0.55, seed=7, through=0.25):
+    """Orthographic views of a flat piece: an LED is mostly seen when its own face is turned
+    towards the camera, and now and then through a gap from the other side (tinsel is sparse)."""
+    rnd = random.Random(seed)
+    out = []
+    for a in angles:
+        t = math.radians(a)
+        pts = []
+        for p in truth:
+            facing = -math.cos(t) if p[2] < 0 else math.cos(t)
+            ok = rnd.random() < (keep if facing > -0.1 else keep * through)
+            pts.append([p[0] * math.cos(t) - p[2] * math.sin(t) + 0.5, p[1]] if ok else None)
+        out.append({"angle": a, "points": pts})
+    return out
+
+
+def test_a_flat_piece_is_not_filled_round_an_axis_that_isnt_there():
+    """fill_gaps' cylinder route is right for a tree and wrong for a star: a star's LEDs all
+    share the vertical axis, so going "round the back" swings a hidden run out into space.
+    The route is chosen from how deep the measured LEDs reach compared with how wide they
+    spread - near 1 for a tree or column, well under half for anything with a front and a back."""
+    truth = two_faced_panel()
+    views = panel_views(truth, [0, 50, 100, 150, 200, 250])
+    _, pts, _, stats = mapping.combine(views, "around", ports=[(0, 0, 250)])
+    seen = [p for p in pts if p]
+    depth = max(p[2] for p in seen) - min(p[2] for p in seen)
+    hide = range(40, 46)                                   # a 6-LED run hidden mid-front
+    part = [None if i in hide else p for i, p in enumerate(pts)]
+    meas = [m and i not in hide for i, m in enumerate(stats["measured"])]
+
+    auto, _ = mapping.fill_gaps(part, [[0, 0, 250]], 250, meas)
+    round_, _ = mapping.fill_gaps(part, [[0, 0, 250]], 250, meas, route="cylinder")
+    straight = max(math.dist(auto[i], pts[i]) for i in hide if pts[i])
+    swung = max(math.dist(round_[i], pts[i]) for i in hide if pts[i])
+    assert straight < 0.25 * swung                         # the cylinder route throws them away
+    # and nothing filled leaves the slab of space the camera actually measured
+    lo, hi = min(p[2] for p in seen), max(p[2] for p in seen)
+    assert all(lo - 0.3 * depth <= auto[i][2] <= hi + 0.3 * depth for i in hide)
+
+
+def test_a_guessed_depth_comes_from_the_same_string():
+    """An LED seen from one angle only has its depth taken from where its own string was just
+    before and just after it. The LED numbers either side of a port boundary are neighbours in
+    the chain but can be metres apart on the installation, so the string matters, not the number."""
+    front = [[0.3 + 0.03 * i, 0.4, -0.25] for i in range(10)]      # port 0: well in front
+    back = [[0.3 + 0.03 * i, 0.6, 0.25] for i in range(10)]        # port 1: well behind
+    truth = front + back
+    views = []
+    for a in (0, 60):
+        t = math.radians(a)
+        views.append({"angle": a, "points": [[p[0] * math.cos(t) - p[2] * math.sin(t) + 0.5, p[1]]
+                                             for p in truth]})
+    views[1]["points"][9] = None                           # the last LED of port 0: seen once
+    _, pts, _, stats = mapping.combine(views, "around", ports=[(0, 0, 10), (1, 10, 10)])
+    assert not stats["measured"][9] and stats["measured"][8] and stats["measured"][10]
+    near = [p for i, p in enumerate(pts) if i < 9]
+    assert abs(pts[9][2] - sum(p[2] for p in near) / len(near)) < 0.2 * abs(pts[10][2] - pts[0][2])
+
+
+def test_the_map_says_what_was_measured_and_what_was_guessed():
+    """Every front/back mistake on the 3D test rig is in an LED whose depth was guessed, so the
+    bridge has to hand that apart rather than report one number for the whole map."""
+    truth = two_faced_panel()
+    views = panel_views(truth, [0, 50, 100, 150, 200, 250])
+    _, pts, info, stats = mapping.combine(views, "around", ports=[(0, 0, 250)])
+    m = stats["measured"]
+    assert len(m) == 250 and sum(m) == stats["multi_view"]
+    assert all(not m[g] for g, p in enumerate(pts) if not p)
+    assert "clamped" in info[0] and info[0]["clamped"] is False
+
+    rep = mapping.report(pts, [None] * 250, [[0, 0, 250]], 250, measured=m)[0]
+    assert rep["measured"] == stats["multi_view"] and rep["estimated"] == stats["single_view"]
+    assert rep["never_seen"] == stats["unseen"]
+    assert 0 < rep["longest_unmeasured_run"] < 60
+    # with no provenance to hand (one capture, flat map) everything seen counts as measured
+    plain = mapping.report(pts, [None] * 250, [[0, 0, 250]], 250)[0]
+    assert plain["measured"] == stats["multi_view"] + stats["single_view"] and plain["estimated"] == 0

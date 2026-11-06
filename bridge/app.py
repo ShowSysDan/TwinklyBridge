@@ -200,23 +200,41 @@ def api_mapping_log():
     return jsonify(ok=True)
 
 
-def _store_maps(ctrls, offsets, pts, cols, save, source, partial=False):
+def _global_ports(ctrls, offsets):
+    """Every controller's ports in global LED numbering, so the mapping code can tell which
+    string an LED is on. Port ids are made unique across controllers."""
+    out = []
+    for n, c in enumerate(ctrls):
+        o = offsets[c.id]
+        for pid, first, length in (c.ports or [[0, 0, c.n_led]]):
+            out.append((f"{n}:{pid}", o + first, length))
+    return out
+
+
+def _store_maps(ctrls, offsets, pts, cols, save, source, partial=False, measured=None):
     """Split global points (one per LED: [x, y] or [x, y, z] or None) into each controller,
-    report per port, fill gaps along the strings and (if save) store the maps."""
+    report per port, fill gaps along the strings and (if save) store the maps.
+    measured: one bool per LED - was its position measured, or was part of it guessed."""
     out = []
     for c in ctrls:
         o = offsets[c.id]
         mine = [p if p and len(p) >= 2 else None for p in pts[o:o + c.n_led]]
-        rep = mapping.report(mine, cols[o:o + c.n_led], c.ports, c.n_led, partial)
-        filled, n_filled = mapping.fill_gaps(mine, c.ports, c.n_led)
+        meas = list(measured[o:o + c.n_led]) if measured else None
+        rep = mapping.report(mine, cols[o:o + c.n_led], c.ports, c.n_led, partial, meas)
+        filled, n_filled = mapping.fill_gaps(mine, c.ports, c.n_led, meas)
         n_found = sum(1 for p in mine if p)
+        n_est = sum(1 for i, p in enumerate(mine) if p and meas and not meas[i])
         if save:
             c.map = [[round(p[0], 5), round(p[1], 5), round(p[2], 5) if len(p) > 2 else 0] if p else [0, 0, 0]
                      for p in filled]
-            c.map_source = f"{source}, {n_found} seen, {n_filled} filled"
+            c.map_source = (f"{source}, {n_found} seen" if meas is None else
+                            f"{source}, {n_found - n_est} measured, {n_est} estimated") + \
+                f", {n_filled} filled"
             c.map_filled = [i for i, p in enumerate(mine) if not p]
+            c.map_estimated = [i for i, p in enumerate(mine) if p and meas and not meas[i]]
             c.map_error = ""
         out.append({"id": c.id, "name": c.name, "found": n_found, "filled": n_filled,
+                    "measured": n_found - n_est, "estimated": n_est,
                     "parameters": c.parameters, "ports": rep})
     if save:
         save_config()
@@ -341,14 +359,18 @@ def api_mapping_combine():
     if None in ctrls or sum(c.n_led for c in ctrls) != data["total"]:
         return jsonify(error="the controllers changed since these views were taken: discard them and capture again"), 409
     try:
-        mode, pts, info, stats = mapping.combine(data["views"], body.get("mode", "auto"), bool(body.get("mirror")))
+        mode, pts, info, stats = mapping.combine(data["views"], body.get("mode", "auto"),
+                                                 bool(body.get("mirror")),
+                                                 _global_ports(ctrls, data["offsets"]))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     _, cols = _union(data)
+    measured = stats.pop("measured", None)
     out = _store_maps(ctrls, data["offsets"], pts, cols, bool(body.get("save")),
-                      f"camera {'3D' if mode == 'around' else '2D'}, {len(data['views'])} views")
+                      f"camera {'3D' if mode == 'around' else '2D'}, {len(data['views'])} views",
+                      measured=measured)
     return jsonify(ok=True, mode=mode, views=info, stats=stats, points=pts, controllers=out,
-                   saved=bool(body.get("save")), totals=parameter_summary())
+                   measured=measured, saved=bool(body.get("save")), totals=parameter_summary())
 
 
 # ---------------------------------------------------------------- capture photos (diagnosis)
@@ -630,7 +652,7 @@ def api_csv_map(cid):
 @app.delete("/api/controllers/<cid>/map")
 def api_clear_map(cid):
     c = get_ctrl(cid)
-    c.map, c.map_source, c.map_filled = None, "", []
+    c.map, c.map_source, c.map_filled, c.map_estimated = None, "", [], []
     save_config()
     log.info("map cleared for %s by %s", c.name, client_ip())
     return jsonify(ok=True)
@@ -656,7 +678,7 @@ def api_map():
             out.append({"id": c.id, "name": c.name, "n_led": c.n_led, "bpp": c.bpp, "ports": c.ports,
                         "group": c.group,
                         "points": [[p[0], p[1], p[2] if len(p) > 2 else 0] for p in (c.map or [])],
-                        "filled": c.map_filled or []})
+                        "filled": c.map_filled or [], "estimated": c.map_estimated or []})
     return jsonify(out)
 
 

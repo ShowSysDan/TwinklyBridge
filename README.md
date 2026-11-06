@@ -485,10 +485,12 @@ port's real string length and checks its colour order.
    For a flat piece one view is enough; more views from the front just fill gaps.
 8. **Build map** combines the views: views from about the same direction are fitted onto
    each other (zoom, turn, shift) and averaged (2D); views from different directions give
-   each LED's 3D position (each LED seen from two directions is placed exactly, one seen
-   from one direction gets its depth from its neighbours). The preview shows the map from
-   the front and from above, coloured along the chain. If it looks mirrored compared with the
-   real object (you walked left), press **Flip**.
+   each LED's 3D position. An LED seen from two directions is **measured**; one seen from a
+   single direction has its sideways position measured and its depth **estimated** from where
+   its own string ran just before and just after it; one never seen is **filled in** along the
+   string. The page leads with how many were never photographed, because that is where
+   front/back mistakes live, and the preview draws estimated LEDs faded. If the map looks
+   mirrored compared with the real object (you walked left), press **Flip**.
 9. **Save map**, then **check it on the installation**: *Left to right*, *Top to bottom*,
    *Front to back*, *Spin around*, *Ring from centre* and *Rainbow across* run bars and
    planes placed by the map. On a right map the bar crosses the real object smoothly and
@@ -496,11 +498,23 @@ port's real string length and checks its colour order.
    patterns* panel (group *On the map*).
 
 **Obstructed or unseen LEDs** are filled in along their string, assuming the string carries
-on the way it was going: in 3D, round the object (angle, distance from the axis and height
-change smoothly, at the string's own spiral rate either side of the gap) rather than straight
-through it; at a string's end, by continuing its last stretch. The vertical axis comes from
-circles fitted to the LEDs seen at each height, so a hidden side doesn't pull it off centre.
-The live map draws filled-in LEDs as rings, so you can see which positions are guesses.
+on the way it was going. Which way it went is itself a guess, and the wrong guess is worse
+than none, so it is chosen from the shape the camera measured:
+
+- **Round pieces** (a tree, a column: as deep as they are wide) are filled round the object -
+  angle, distance from the axis and height change smoothly, at the string's own spiral rate
+  either side of the gap - rather than straight through it. The vertical axis comes from
+  circles fitted to the LEDs seen at each height, so a hidden side doesn't pull it off centre.
+- **Everything else** - stars, signs, panels, anything with a front and a back - is filled
+  along a smooth curve through the LEDs that were seen, which assumes only that the string
+  carries on. A short gap between two measured LEDs gets the curve; a longer one, or one whose
+  own ends were guessed, goes straight. No filled path is ever longer than the wire it stands
+  for. Assuming a cylinder here would wrap LEDs round a shape that isn't there.
+
+At a string's end, the fill continues its last stretch, no further than the wire reaches.
+The live map draws filled-in LEDs as rings and one-angle LEDs faded, so you can see at a
+glance which positions are measurements and which are guesses; the per-port table gives the
+same three counts and the longest run with no measurement in it.
 
 Views are kept (in `instance/mapping_views.json`) until you discard them, so you can come
 back and add views later; starting with a different set of controllers starts afresh.
@@ -750,7 +764,8 @@ POST /api/controllers/<id>/probe         Diagnose: GET each likely map URL (read
 POST /api/controllers/<id>/map/csv       multipart file= (columns index,x,y,z)
 DELETE /api/controllers/<id>/map
 GET  /api/controllers/<id>/map.csv
-GET  /api/map                            points per controller
+GET  /api/map                            points per controller, with "filled" (never seen) and
+                                          "estimated" (seen from one angle, depth guessed)
 GET  /api/frames                         last frame per controller, base64
 POST /api/controllers/<id>/test          {"mode": "pattern"|"pixel"|"solid"|"off"|"stop", "pattern": "chase",
                                           "index": 10, "rgb": [255,0,0], "speed": 25, "seconds": 3}
@@ -765,6 +780,8 @@ POST /api/mapping/save                   {"session", "points": [[x,y]|null...], 
 POST /api/mapping/view                   {"session", "angle", "points", "colours", "heading", "pitch", "moved"}: keep as a view
 GET  /api/mapping/views                  the kept views; DELETE discards them
 POST /api/mapping/combine                {"mode": "auto"|"flat"|"around", "mirror": false, "save": false}
+                                          -> points, per-view fit, stats and "measured" (one bool per LED:
+                                             position measured from two angles, or partly guessed)
 POST /api/mapping/captures/<name>/<file> one photo (image/png) or the notes (capture.json) of a capture
 GET  /api/mapping/captures               the captures sent from the phone; <name>.zip downloads one; DELETE removes it
 POST /api/mapping/stop

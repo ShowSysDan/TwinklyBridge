@@ -345,6 +345,7 @@ function draw() {
     for (const p of m.proj) { dlo = Math.min(dlo, p[2]); dhi = Math.max(dhi, p[2]); }
     const order = m.proj.map((p, i) => i).sort((a, b) => m.proj[a][2] - m.proj[b][2]);    // far first
     const guessed = new Set(m.filled || []);                                                // drawn as rings
+    const softened = new Set(m.estimated || []);                     // seen once: depth guessed, drawn dimmer
     for (const i of order) {
       const [x, y, d] = m.proj[i];
       const px = ox + (x - t.x0) * s, py = oy + (y - t.y0) * s;      // Twinkly y grows downward, same as canvas
@@ -359,7 +360,7 @@ function draw() {
       }
       ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
       if (guessed.has(i) && col.startsWith('rgba(44,')) { ctx.strokeStyle = `rgba(140,149,166,${near})`; ctx.lineWidth = 1; ctx.stroke(); }
-      else { ctx.fillStyle = col; ctx.fill(); }
+      else { ctx.fillStyle = softened.has(i) && col.startsWith('rgba(44,') ? `rgba(44,52,66,${near * 0.45})` : col; ctx.fill(); }
       hit.push({cid: m.id, c: m, index: i, x: px, y: py, d});
     }
   }

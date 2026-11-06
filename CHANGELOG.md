@@ -4,7 +4,52 @@ Every change the user gets is its own version: bump `bridge/__init__.py` and
 `pyproject.toml` together and add a section here (`test_version_matches_everywhere`
 fails if they disagree). Semver: patch = fix, minor = feature, major = breaking.
 
-## [0.14.0] - 2026-11-07
+## [0.15.0] - 2026-11-06
+
+**3D maps: the depth of a hidden LED is guessed far better, and the map now says which
+positions are measurements and which are guesses.**
+
+Measured on a new 3D ground-truth rig (three props - a two-faced flat star, a wrapped cone,
+a flat star with trees in front and a frame behind - 1250 LEDs in 5 ports, rendered from
+several angles with real occlusion, see-through and the decoder's own losses, against known
+positions). Over 48 held-out sets with fresh geometry, fresh noise, 5% mis-decoded LEDs and
+both extremes of tinsel transparency, **every one of the 48 improved**: median 3D error
+11.9 -> 5.7 px at 960 wide, LEDs placed on the wrong side of the piece 4.5% -> 1.3%, worst
+set 17.2% -> 6.8%.
+
+- **An LED seen from one angle takes its depth from its own string**, interpolated between
+  the nearest measured LED before it and after it on the same port (within 10 LEDs), instead
+  of averaging the six nearest by LED number across port boundaries. "The string runs between
+  two points we measured" invents no shape; the old rule could pull an LED onto the wrong face.
+  This is where most of the gain is.
+- **The gap fill no longer assumes a cylinder unless the piece is one.** Filling a hidden run
+  "round the back" is right for a tree or column and wrong for a star or a sign, where every
+  LED shares the vertical axis and the run gets swung out into space. The route is now chosen
+  from how deep the measured LEDs reach compared with how wide they spread: near 1 for a round
+  piece (fill round the axis, as before), well under half for anything with a front and a back
+  (fill along a smooth curve through the LEDs that were seen). A long gap, or one whose own
+  ends were guessed, goes straight, and no filled path is ever longer than the wire it stands
+  for - a string cannot stretch.
+- **The typed view angles are refined against the other views.** Each view's angle was being
+  judged against a map that view itself helped build, where its current angle always looks
+  right, so the search stalled. It is now judged against a map built without it, with the
+  view's own scale and offsets re-fitted at every candidate angle, and only moved when that
+  clearly cuts the error. The page warns when a view had to be moved the full 15 degrees,
+  which usually means a compass read badly near metal.
+- **Measured / estimated / filled is carried per LED** out of the solver, into the per-port
+  report (with the longest run that has no measurement in it), the saved map, `GET /api/map`
+  and `POST /api/mapping/combine`. The build page leads with how many LEDs were never
+  photographed rather than how many were seen twice - the second number goes UP when you
+  stand still and photograph the same side again. The preview draws estimated LEDs faded, and
+  the live map draws never-seen ones as rings as before.
+- With only two views the page now says plainly that "measured" does not yet mean front and
+  back are told apart: two views from nearly the same side agree with each other and are still
+  both looking at the front.
+
+Redeploy: Linux `git pull && sudo bash install.sh`; Windows `git pull`, `install.bat`, restart
+`run.bat`. Existing saved maps keep working; re-run a capture to get the new per-LED detail.
+
+## [0.14.0] - 2026-11-06
 
 **The Eos export no longer folds a flat piece's back face onto its front.**
 
